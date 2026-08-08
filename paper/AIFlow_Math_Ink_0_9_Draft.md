@@ -63,8 +63,8 @@ AIFlow Math Ink 0.9는 단계별 책임, Top-k 보존, raw fallback이라는 구
 ## 참고문헌
 
 1. H. Mouchère et al., “ICFHR 2014 Competition on Recognition of On-line Handwritten Mathematical Expressions (CROHME 2014),” ICFHR 2014. DOI: 10.1109/ICFHR.2014.42. https://www.cs.rit.edu/~rlaz/files/Crohme2014FinalVersion.pdf
-2. J. Zhang et al., “SCAN: A Scalable Neural Networks Framework Towards Compact and Efficient Models,” online handwritten mathematical expression recognition preprint context. https://arxiv.org/abs/2002.08670
-3. P. Chen et al., “MathWriting: A Dataset For Handwritten Mathematical Expression Recognition,” 2024. https://arxiv.org/abs/2404.10690
+2. J. Wang, J. Du, and J. Zhang, “Stroke Constrained Attention Network for Online Handwritten Mathematical Expression Recognition,” 2020. https://arxiv.org/abs/2002.08670
+3. P. Gervais, A. Fadeeva, and A. Maksai, “MathWriting: A Dataset For Handwritten Mathematical Expression Recognition,” 2024. https://arxiv.org/abs/2404.10690
 
 ## 재현성과 공개 상태
 
