@@ -2,6 +2,11 @@
 
 > 연구 논문 초안 · 2026-08-08 · 제품 성능 주장 아님
 
+저자
+
+1. Chae Won Lee (제1저자)
+2. Seok Jun Kim (제2저자)
+
 ## 초록
 
 본 연구는 온라인 수식 필기 인식을 형태/그리딩, 문자 후보 판정, 보수적 결정의 세 단계로 분리하고, 원본 stroke 순서와 raw fallback을 보존하는 AIFlow Math Ink 구조를 제안한다. 0.9 단계에서는 glyph bbox 중심 정규화, 종횡비 보존 letterbox, class/contributor 균형 sampling을 적용한 additive calibrator를 기존 378-label trajectory encoder에 결합하고 `=` label을 추가하였다. 47개 수식의 211개 문자로 학습하고, 정확한 수식 및 prompt 중복이 없는 49개 수식·171개 문자 replay에서 평가했다. 선택 seed31은 동일 baseline 대비 문자 Top-1을 50.29%에서 87.72%, Top-5를 70.18%에서 98.83%, 수식 exact를 26.53%에서 67.35%로 높였다. 그러나 replay의 contributor ID가 없어 writer-disjoint를 증명할 수 없고 `f`, `g` 회귀가 남아 있으므로 연구 후보로만 채택한다.
