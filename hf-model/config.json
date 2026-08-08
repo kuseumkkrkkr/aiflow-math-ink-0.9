@@ -1,0 +1,14 @@
+{
+  "schema": "aiflow-normalized-balanced-calibrator09/v1",
+  "release": "AIFlow Math Ink 0.9",
+  "architecture": "additive observed-label calibration head",
+  "base_model": "cwLeeDev/aiflow-math-ink-06-intermediate",
+  "base_seed": 17,
+  "label_count": 379,
+  "added_labels": ["="],
+  "normalization": "glyph_bbox_letterbox_local_context",
+  "pressure_used": false,
+  "research_adopted": true,
+  "product_adopted": false,
+  "checkpoint_sha256": "46eb2b283d5d61f707572e0295e4001e759fbe1693660fe92104347108dff725"
+}
