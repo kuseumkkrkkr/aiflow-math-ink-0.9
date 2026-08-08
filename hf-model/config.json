@@ -10,5 +10,9 @@
   "pressure_used": false,
   "research_adopted": true,
   "product_adopted": false,
-  "checkpoint_sha256": "46eb2b283d5d61f707572e0295e4001e759fbe1693660fe92104347108dff725"
+  "guard_policy": {
+    "baseline_confidence": 0.95,
+    "max_training_support": 2
+  },
+  "checkpoint_sha256": "bf3bc80c07315b812e2419ffbddadb0ecb3bd5b73e00799fc271979a0124c2dd"
 }

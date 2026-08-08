@@ -9,7 +9,7 @@
 
 ## 초록
 
-본 연구는 온라인 수식 필기 인식을 형태/그리딩, 문자 후보 판정, 보수적 결정의 세 단계로 분리하고, 원본 stroke 순서와 raw fallback을 보존하는 AIFlow Math Ink 구조를 제안한다. 0.9 단계에서는 glyph bbox 중심 정규화, 종횡비 보존 letterbox, class/contributor 균형 sampling을 적용한 additive calibrator를 기존 378-label trajectory encoder에 결합하고 `=` label을 추가하였다. 47개 수식의 211개 문자로 학습하고, 정확한 수식 및 prompt 중복이 없는 49개 수식·171개 문자 replay에서 평가했다. 선택 seed31은 동일 baseline 대비 문자 Top-1을 50.29%에서 87.72%, Top-5를 70.18%에서 98.83%, 수식 exact를 26.53%에서 67.35%로 높였다. 그러나 replay의 contributor ID가 없어 writer-disjoint를 증명할 수 없고 `f`, `g` 회귀가 남아 있으므로 연구 후보로만 채택한다.
+본 연구는 온라인 수식 필기 인식을 형태/그리딩, 문자 후보 판정, 보수적 결정의 세 단계로 분리하고, 원본 stroke 순서와 raw fallback을 보존하는 AIFlow Math Ink 구조를 제안한다. 0.9 단계에서는 glyph bbox 중심 정규화, 종횡비 보존 letterbox, class/contributor 균형 sampling을 적용한 additive calibrator를 기존 378-label trajectory encoder에 결합하고 `=` label을 추가하였다. 공개 동의가 확인된 119개 수식을 비식별 stroke 데이터로 구성하고, ownership이 검수된 47개 수식·211개 문자로 학습했다. 49개 수식·171개 문자 replay에서 seed31은 문자 Top-1을 50.29%에서 87.72%, 수식 exact를 26.53%에서 67.35%로 높였다. CROHME2019 CC BY-NC valid 985식에서는 truth-group 문자 Top-1을 56.96%에서 74.11%로 높였다. 그러나 replay의 writer-disjoint를 증명할 수 없고 guard threshold도 독립 split에서 선택되지 않았으므로 연구 후보로만 채택한다.
 
 ## 1. 연구 목적
 
@@ -37,7 +37,7 @@ stroke의 시간 순서, pen-up 경계, 기하 관계를 보존해 문자 후보
 
 전체 수집 기록은 119개이며 valid 110, pending 4, reject 5다. 0.9 학습에는 검수된 47개 수식, 211개 문자, 25개 관측 label, 3 contributors를 사용했다. replay는 기존 수동 ownership 49개 수식, 171개 문자다. 학습과 replay 사이 exact formula 및 prompt 중복은 없지만 replay에 contributor ID가 없어 writer-disjoint split은 증명할 수 없다.
 
-동의 문구는 AIFlow 상업용 필기 인식 모델의 학습·검증을 허용하지만 공개 재배포는 명시하지 않는다. 따라서 원본 stroke, 이미지, contributor/session ID는 공개하지 않고 비식별 집계만 배포한다.
+데이터 관리자는 2026-08-08 참여자들의 공개 배포 동의가 완료됐음을 확인했다. 공개본은 stroke·point 순서를 보존하되 원본 contributor/session/prompt ID, 기록 시각, 이미지 URL, IP·원본 경로를 제거하고 dataset-local writer/session 별칭과 수식 상대 시간만 제공한다. valid 110건만 기본 학습 대상으로 사용하며 pending 4건과 reject 5건은 분리한다.
 
 ## 5. 실험 설정
 
@@ -55,11 +55,26 @@ base는 AIFlow Math Ink 0.6 seed17의 378-label encoder와 online adapter다. �
 
 seed31은 171개 문자 중 67개를 개선하고 3개를 악화시켰다. `f`는 6/6에서 5/6, `g`는 4/5에서 2/5로 하락했다. `/`와 `\sqrt{}`는 각각 단 하나의 replay 표본에서 여전히 실패했다.
 
+학습 support가 3개 미만인 label에서 baseline Top-1 confidence가 0.95 이상이면 baseline을 보존하는 guard는 seed31의 집계 정확도를 유지하면서 개선/회귀를 67/3에서 66/2로 바꿨다. 3개 seed 모두에서 회귀는 3건에서 2건으로 줄었지만 같은 replay에서 확인했으므로 독립적인 성능 향상으로 확정하지 않는다.
+
+### 6.1 CROHME2019 비상업 검증
+
+Kaggle `ntcuong2103/crohme2019`의 CC BY-NC valid split에서 parse 가능한 985식을 평가했다. CROHME는 학습에 포함하지 않았고 공식 test 1,199식도 사용하지 않았다.
+
+| 지표 | baseline | calibrator | guarded |
+|---|---:|---:|---:|
+| truth-group 문자 Top-1 | 56.96% | 74.11% | 74.18% |
+| truth-group 문자 Top-5 | 79.97% | 92.45% | 92.28% |
+| end-to-end group-token Top-1 recall | 48.20% | 62.17% | 62.22% |
+| fully-covered 수식 exact | 7.95% | 11.98% | 12.10% |
+
+공개 가능한 0.6 geometry gridder의 partition exact는 40.81%, exact group recall은 82.48%였다. lattice group ceiling은 99.86%여서 후보 생성보다 ownership 선택이 더 큰 그리딩 병목으로 남는다.
+
 ## 7. 논의
 
 결과는 정규화와 제한적 additive calibration이 소규모 실제 필기 분포 적응에 효과가 있을 가능성을 보여준다. 하지만 표본 수가 작고 writer-disjoint가 아니므로 일반 사용자 성능이나 상용 수준을 증명하지 않는다. 높은 Top-5는 후보 보존 전략의 유용성을 뒷받침하지만, 수식 exact와 동일하지 않다. 다음 검증은 contributor 식별자가 있는 writer-disjoint split, `f/g` 및 희소 기호 보강, 그리딩 ownership 평가를 동시에 보고해야 한다.
 
-0.9 실험은 CROHME나 MathWriting에서 수행하지 않았다. 과거 CROHME 연구 수치는 구조 탐색의 역사적 근거일 뿐 본 결과와 직접 비교하지 않는다. MathWriting도 본 실험에 포함하지 않았다.
+CROHME2019 결과는 비상업 연구 평가이며 제품 성능 근거로 사용할 수 없다. 후속 비상업 gridder artifact는 상용 배포 정리 과정에서 제거되어 이번 실행에서는 공개 가능한 0.6 geometry gridder를 사용했다. MathWriting은 이번 실험에 포함하지 않았다.
 
 ## 8. 결론
 
@@ -70,7 +85,8 @@ AIFlow Math Ink 0.9는 단계별 책임, Top-k 보존, raw fallback이라는 구
 1. H. Mouchère et al., “ICFHR 2014 Competition on Recognition of On-line Handwritten Mathematical Expressions (CROHME 2014),” ICFHR 2014. DOI: 10.1109/ICFHR.2014.42. https://www.cs.rit.edu/~rlaz/files/Crohme2014FinalVersion.pdf
 2. J. Wang, J. Du, and J. Zhang, “Stroke Constrained Attention Network for Online Handwritten Mathematical Expression Recognition,” 2020. https://arxiv.org/abs/2002.08670
 3. P. Gervais, A. Fadeeva, and A. Maksai, “MathWriting: A Dataset For Handwritten Mathematical Expression Recognition,” 2024. https://arxiv.org/abs/2404.10690
+4. ntcuong2103, “CROHME2019,” Kaggle dataset mirror, CC BY-NC 4.0. https://www.kaggle.com/datasets/ntcuong2103/crohme2019
 
 ## 재현성과 공개 상태
 
-원시 지표는 `reports/seed31_metrics.json`, 학습 진입점은 `scripts/train_normalized_balanced_touch_calibrator09.py`, 시각 감사는 `artifacts/normalized_class_means.png`에 있다. private 입력 경로와 원본 데이터가 필요하므로 제3자가 공개물만으로 전체 학습을 완전히 재현할 수는 없다. 공개 체크포인트는 base 의존성을 명시한 연구 artifact다.
+공개 데이터와 ownership은 Hugging Face dataset에, 원시 replay 지표는 `reports/public_retrain_seed31_metrics.json`, CROHME 결과는 `reports/crohme2019_valid.json`, 학습 진입점은 `scripts/train_normalized_balanced_touch_calibrator09.py`에 있다. 공개 데이터만으로 calibrator 학습은 재현할 수 있지만 기존 필기 replay 원본은 별도 내부 검증 자료이므로 동일 replay 평가는 완전 공개 재현이 아니다. 공개 체크포인트는 base 의존성을 명시한 연구 artifact다.

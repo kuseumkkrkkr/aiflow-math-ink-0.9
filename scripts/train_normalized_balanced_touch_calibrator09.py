@@ -26,6 +26,31 @@ from scripts.train_owned_formula_touch_adapter09 import _formula_samples
 from scripts.train_pressure_free_touch_adapter09 import _owned_phone
 
 
+def _public_formula_samples(formulas: Path, ownership: Path) -> list[dict]:
+    records = {
+        row["sample_id"]: row for row in (
+            json.loads(line) for line in formulas.read_text(encoding="utf-8").splitlines() if line.strip()
+        )
+    }
+    output = []
+    for annotation in (
+        json.loads(line) for line in ownership.read_text(encoding="utf-8").splitlines() if line.strip()
+    ):
+        if not annotation.get("accepted"):
+            continue
+        record = records[annotation["sample_id"]]
+        strokes = [{
+            "order": order, "stroke_id": order,
+            "points": [[float(point["x"]), float(point["y"]), float(point["t_ms"])] for point in stroke["points"]],
+        } for order, stroke in enumerate(sorted(record["strokes"], key=lambda value: value["order"]))]
+        output.append({
+            "sample_id": annotation["sample_id"], "writer": annotation["writer_id"], "strokes": strokes,
+            "truth_groups": [frozenset(group) for group in annotation["groups"]],
+            "truth_labels": [str(label) for label in annotation["labels"]],
+        })
+    return output
+
+
 def _materialize_local(samples: list[dict]):
     xs, labels, formula_ids, writers = [], [], [], []
     for sample in samples:
@@ -127,24 +152,39 @@ def _visualize(features, labels, output: Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--annotations", type=Path, required=True)
+    parser.add_argument("--annotations", type=Path)
+    parser.add_argument("--public-formulas", type=Path)
+    parser.add_argument("--public-ownership", type=Path)
     parser.add_argument("--adapter", type=Path, required=True); parser.add_argument("--base", type=Path, required=True)
     parser.add_argument("--phone-source", type=Path, required=True); parser.add_argument("--phone-annotations", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True); parser.add_argument("--seed", type=int, default=17)
     parser.add_argument("--epochs", type=int, default=20)
+    parser.add_argument("--min-observed-samples", type=int, default=1)
     args = parser.parse_args(); random.seed(args.seed); np.random.seed(args.seed); torch.manual_seed(args.seed)
     if torch.cuda.is_available(): torch.cuda.manual_seed_all(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     engine, online = _load_model06(args.base, args.adapter, device)
     for parameter in engine.model.parameters(): parameter.requires_grad_(False)
     for parameter in online.parameters(): parameter.requires_grad_(False)
-    train_samples = _formula_samples(args.annotations); replay_samples = _owned_phone(args.phone_source, args.phone_annotations)
+    if args.public_formulas or args.public_ownership:
+        if not args.public_formulas or not args.public_ownership:
+            parser.error("--public-formulas and --public-ownership must be provided together")
+        train_samples = _public_formula_samples(args.public_formulas, args.public_ownership)
+    elif args.annotations:
+        train_samples = _formula_samples(args.annotations)
+    else:
+        parser.error("provide --annotations or the two public dataset paths")
+    replay_samples = _owned_phone(args.phone_source, args.phone_annotations)
     train_x, train_y, train_formula, train_writer = _materialize_local(train_samples)
     replay_x, replay_y, replay_formula, _ = _materialize_local(replay_samples)
     labels = tuple(engine.labels) + ("=",); label_index = {label:i for i,label in enumerate(labels)}
     if any(label not in label_index for label in train_y + replay_y):
         raise ValueError("Extended ontology still misses a collected label")
-    observed_existing = sorted({label_index[label] for label in train_y if label != "="})
+    observed_counts = Counter(train_y)
+    observed_existing = sorted({
+        label_index[label] for label in train_y
+        if label != "=" and observed_counts[label] >= args.min_observed_samples
+    })
     head = AdditiveObservedHead09(engine.model.exact_head.in_features, observed_existing).to(device)
     optimizer = torch.optim.AdamW(head.parameters(), lr=8e-4, weight_decay=2e-3)
     label_writers = defaultdict(set); pair_count = Counter(zip(train_y, train_writer, strict=True))
@@ -168,20 +208,31 @@ def main() -> int:
         history.append({"epoch":epoch,"loss":sum(losses)/len(losses)})
     args.output.mkdir(parents=True,exist_ok=True)
     baseline=_baseline(engine,online,replay_x,device); candidate=_forward(engine,online,head,replay_x,device)
+    baseline_probability = baseline.softmax(1)
+    baseline_top = baseline.argmax(1)
+    preserve = torch.tensor([
+        observed_counts.get(labels[int(index)], 0) < 3 for index in baseline_top
+    ]) & baseline_probability.max(1).values.ge(.95)
+    guarded = torch.where(preserve[:, None], baseline, candidate)
     train_logits=_forward(engine,online,head,train_x,device)
     _visualize(train_x,train_y,args.output/"normalized_class_means.png")
     checkpoint=args.output/"normalized_balanced_calibrator.pt"
     torch.save({"schema":"aiflow-normalized-balanced-calibrator09/v1","state_dict":deepcopy(head.state_dict()),
                 "labels":labels,"observed_existing":observed_existing,"normalization":"glyph_bbox_letterbox_local_context",
-                "pressure_used":False,"product_adopted":False},checkpoint)
+                "pressure_used":False,"product_adopted":False,
+                "guard_policy":{"baseline_confidence":0.95,"max_training_support":2}},checkpoint)
     report={"experiment":"P-NORMALIZED-BALANCED-TOUCH09-001","generated_at":datetime.now(timezone.utc).isoformat(),
             "seed":args.seed,"device":str(device),"training":{"formulae":len(train_samples),"symbols":len(train_y),
             "labels":len(set(train_y)),"contributors":len(set(train_writer)),"class_writer_balanced":True,
-            "normalization":"existing bbox crop/aspect-preserving letterbox + local character context","equality_added":True},
+            "normalization":"existing bbox crop/aspect-preserving letterbox + local character context","equality_added":True,
+            "min_observed_samples":args.min_observed_samples,"corrected_existing_labels":len(observed_existing)},
             "training_fit":_metrics(train_logits,train_y,train_formula,labels),
             "replay":{"baseline":_metrics(baseline,replay_y,replay_formula,labels),
                       "candidate":_metrics(candidate,replay_y,replay_formula,labels),
-                      "paired":_paired(baseline,candidate,replay_y,labels)},"history":history,"adopted":False}
+                      "guarded_candidate":_metrics(guarded,replay_y,replay_formula,labels),
+                      "paired":_paired(baseline,candidate,replay_y,labels),
+                      "guarded_paired":_paired(baseline,guarded,replay_y,labels),
+                      "guard_preserved_symbols":int(preserve.sum())},"history":history,"adopted":False}
     (args.output/"metrics.json").write_text(json.dumps(report,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
     print(json.dumps({"training":report["training"],"baseline":report["replay"]["baseline"],
                       "candidate":report["replay"]["candidate"],"paired":{k:v for k,v in report["replay"]["paired"].items() if k!='by_label'}},ensure_ascii=False))
