@@ -46,7 +46,8 @@ def _aliases(values: list[str], prefix: str) -> dict[str, str]:
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("".join(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n" for row in rows), encoding="utf-8")
+    payload = "".join(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n" for row in rows)
+    path.write_bytes(payload.encode("utf-8"))
 
 
 def build(args: argparse.Namespace) -> dict:
@@ -151,7 +152,7 @@ def build(args: argparse.Namespace) -> dict:
     }
     for path in sorted((args.output / "data").glob("*.jsonl")):
         manifest["files"][path.name] = {"bytes": path.stat().st_size, "sha256": sha256(path.read_bytes()).hexdigest()}
-    (args.output / "dataset_info.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    (args.output / "dataset_info.json").write_bytes((json.dumps(manifest, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
     return manifest
 
 
