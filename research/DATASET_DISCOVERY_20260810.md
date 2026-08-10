@@ -9,14 +9,14 @@ Searched 2026-08-10 through Kaggle CLI, Google-indexed primary dataset pages, UC
 | UJI Pen Characters v2 | X/Y strokes; 60 writers; two sessions | CC BY 4.0 | Staged as approved isolated-character pretraining data. |
 | Project-owned Math Ink | Original points, order, sensor fields, target cells/relations | Project-owned subject to consent | Primary online HWR, grouping, ownership, and formula-relation source. |
 
-## Re-audit candidates
+## Reviewed candidates and current status
 
-| Dataset | Why relevant | Blocking condition |
+| Dataset | Why relevant | Current restricted use |
 |---|---|---|
-| ISGL Online/Offline HWR | 64 writers; pen up/down, X/Y, aggregate stroke duration | Original was verified, but privacy/consent scope, 571-row derivative loss, stale eligibility, and writer split remain blocked. |
-| UCI Character Trajectories | X/Y/force time series; CC BY 4.0 | Preprocessed single-stroke data from one writer; representation-only role needs approval. |
-| HWRT / Detexify | X/Y/time; user ID and user-agent; mathematical symbols | ODbL operations, privacy minimization, mixed time bases, duplicate isolation, and writer-disjoint split required. |
-| BDSHWA | Wacom digital ink; 29 writers; structured English/Bengali tasks; CC BY 4.0 | Audit found demographic/biometric risk, participant-ID collision, modality/schema drift, and no mathematical supervision. |
+| ISGL Online/Offline HWR | 64 source writer IDs; pen up/down, X/Y, aggregate stroke duration | Approved CC BY 4.0 for online English letters/digits/words; training only; complete-source rebuild preferred. |
+| UCI Character Trajectories | X/Y/force time series; CC BY 4.0 | Approved as one-writer lowercase single-stroke training data; no validation/model selection. |
+| HWRT / Detexify | X/Y/time; mathematical symbols | Approved after deterministic time/duplicate/privacy filtering; box-local math-symbol training only; no model selection/final evaluation. |
+| BDSHWA | Wacom digital ink; 29 participant folders; structured English/Bengali tasks; CC BY 4.0 | Approved raw trajectories for future general HWR expansion; all demographic/identity/biometric metadata and objectives excluded. |
 | CASIA online handwriting | Very large online XY/stroke corpus with writer coverage | Commercial use requires direct licensing/permission; do not download or train before written terms. |
 | TUAT Nakagawa Lab online DB | Licensed commercial-use route exists | Paid license and explicit procurement/usage agreement required. |
 
@@ -36,8 +36,8 @@ No externally found dataset can replace project-owned ink for formula grouping, 
 ## 2026-08-10 re-audit disposition
 
 - Original ISGL, UCI Character Trajectories, HWRT, and BDSHWA artifacts were downloaded to D: and independently opened, hashed, and structurally audited.
-- Only UJI Pen Characters v2 remains approved external training data.
-- ISGL, UCI Character Trajectories, HWRT, and BDSHWA remain blocked for the reasons recorded in each dataset folder.
+- UJI, ISGL, UCI Character Trajectories, curated HWRT, and restricted raw BDSHWA form the approved external 1.0 training pool.
+- This approval does not mean the current 0.9 checkpoint has already been retrained on those external corpora.
 - Three additional Hugging Face trajectory repositories were downloaded and rejected because they lack licence/provenance and have severe split leakage.
 - Representative 2022-2025 online-HWR/HMER papers did not reveal a new downloadable, commercially clear data class. Paper searching stopped at that saturation point; see `HWR_PAPER_DATASET_REVIEW_20260810.md`.
 

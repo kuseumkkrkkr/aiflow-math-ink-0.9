@@ -1,6 +1,6 @@
-# UCI Character Trajectories re-audit result: structurally valid, role blocked
+# UCI Character Trajectories provenance and approved use
 
-Audited 2026-08-10 from the official UCI download. Provenance, archive integrity, and numeric structure pass, but the dataset remains outside product training until a narrowly scoped experiment passes the project adoption gates.
+Audited 2026-08-10 from the official UCI download. Provenance, archive integrity, numeric structure, and CC BY 4.0 terms pass. The project owner explicitly accepts the corpus as one-writer training data.
 
 ## Source and integrity
 
@@ -22,18 +22,18 @@ Audited 2026-08-10 from the official UCI download. Provenance, archive integrity
 - Sampling interval is documented as 0.005 seconds (200 Hz).
 - The released values were numerically differentiated, Gaussian-smoothed, normalized, and time-shifted. They are not raw device coordinates.
 
-## Blocking reasons
+## Known limitations and adopted scope
 
-1. One writer cannot support writer-disjoint training or model selection.
+1. Treat all 2,858 samples as one writer and training-only; never derive validation or model-selection claims from this corpus.
 2. Single pen-down samples cannot supervise multi-stroke grouping, ownership, or formula layout.
-3. The transformed signals do not match AIFlow's raw ordered-stroke contract.
-4. Scientific usefulness is limited to an optional representation-pretraining ablation; usefulness is not established by the permissive licence alone.
+3. The released signals are differentiated, smoothed, normalized, and shifted rather than raw device coordinates.
+4. Use only for lowercase Latin single-stroke representation pretraining.
 
-## Release gate
+## Operating rules
 
 - Register CC BY 4.0 attribution.
-- Use only in an isolated single-stroke representation experiment.
-- Evaluate on a held-out project-owned writer split and retain only if all character, ownership, relation, and end-to-end formula gates are non-regressive.
+- Assign the entire corpus to training under one writer group.
+- Evaluate any resulting checkpoint on a held-out project-owned writer split and retain only if all character, ownership, relation, and end-to-end formula gates are non-regressive.
 - Never use it to train ownership, grouping, relation, or final-decision components.
 
-Decision: **BLOCKED FROM 1.0 TRAINING - archive valid, optional ablation only after explicit approval.**
+Decision: **APPROVED EXTERNAL / SINGLE WRITER - representation pretraining only.**

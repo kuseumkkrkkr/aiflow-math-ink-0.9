@@ -1,6 +1,6 @@
-# ISGL re-audit result: remain blocked
+# ISGL provenance and approved use
 
-Audited 2026-08-10 from the original Mendeley Data version 1 download. The archive and online trajectory files are readable, but this dataset is not admitted to AIFlow Math Ink 1.0 training.
+Audited 2026-08-10 from the original Mendeley Data version 1 download. The source is CC BY 4.0 and is admitted to the restricted AIFlow Math Ink 1.0 external training pool by project-owner decision on 2026-08-10.
 
 ## Source and integrity
 
@@ -35,23 +35,24 @@ The old interrupted downloads and range parts were removed after the complete so
 
 - 571 original character records are absent.
 - Every retained row is assigned to `train`; there is no writer-disjoint validation or test split.
-- Every row embeds `eligible_for_training=true`, even though its track says registry approval is pending and the file is located in the blocked tier.
+- Every row embeds `eligible_for_training=true`; at audit time this contradicted its pending-registry track and blocked-tier location.
 - Timestamps are null and `timestamp_mode=canonical`; only aggregate stroke durations survive.
 
-The embedded eligibility value is stale and must not override the folder/registry decision.
+The embedded eligibility flag now agrees with the approved registry state, but the inherited derivative remains an incomplete 7,414-row training-only view rather than the canonical source.
 
-## Blocking reasons
+## Known limitations and adopted scope
 
-1. The source page does not document participant consent, privacy handling, or commercial biometric-model use beyond the dataset copyright licence.
-2. The migrated artifact omits 571 rows and does not record a reproducible exclusion manifest.
-3. It has no writer-disjoint model-selection split and currently carries a contradictory eligibility flag.
-4. It supplies isolated English characters/words, not mathematical layout, stroke ownership, or relation labels.
+1. Use is based on the source-page CC BY 4.0 licence; attribution must accompany releases.
+2. The inherited derivative omits 571 rows and has no exclusion manifest, so complete-corpus work must rebuild from the original source.
+3. Existing rows are all `train`; ISGL cannot select a model or provide final evaluation evidence until a reproducible source rebuild creates source-writer groups.
+4. Use only the online English uppercase/lowercase, digit, and word trajectories. Offline raster data is outside this HWR track.
+5. ISGL cannot supervise mathematical layout, stroke ownership, spatial relations, or the final decision layer.
 
-## Release gate
+## Operating rules
 
-- Obtain a written privacy/consent and commercial-use assessment.
-- Rebuild from the original archive with a deterministic rejection manifest and `eligible_for_training=false` by default.
-- Create writer-disjoint train/validation/test splits.
-- Limit any approved role to box-local character candidate pretraining and pass project-owned writer-holdout plus CROHME regression gates.
+- Register source/DOI attribution and retain the original archive hash.
+- The 7,414-row inherited derivative may be used for initial training only; prefer a deterministic rebuild of all valid source rows.
+- Do not report ISGL-only validation as product performance.
+- Gate any resulting checkpoint on project-owned writer-holdout and the existing regression suite.
 
-Decision: **BLOCKED - no training, validation, model selection, or release use.**
+Decision: **APPROVED EXTERNAL / RESTRICTED - online English character, digit, and word trajectory training only.**

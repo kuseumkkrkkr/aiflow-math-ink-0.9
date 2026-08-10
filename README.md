@@ -5,12 +5,14 @@
 ## 1.0 데이터 정책
 
 - 데이터 카탈로그: [datasets/DATASET_CATALOG.md](datasets/DATASET_CATALOG.md)
+- 현재 활용·승인 데이터 목록: [datasets/UTILIZED_DATASETS.md](datasets/UTILIZED_DATASETS.md)
 - 2026-08-10 원본 재감사: [research/DATASET_REAUDIT_20260810.md](research/DATASET_REAUDIT_20260810.md)
 - HWR 논문·데이터셋 포화점 검토: [research/HWR_PAPER_DATASET_REVIEW_20260810.md](research/HWR_PAPER_DATASET_REVIEW_20260810.md)
 - 외부 원본은 `datasets/`에 출처·상태별로 분리한다. 압축 원본은 로컬 보관 대상이며 Git에 넣지 않는다.
-- `10_approved_external`만 문자 HWR 보조학습 후보이다.
+- `10_approved_external`만 승인된 외부 HWR 학습 풀이다. 승인과 현재 체크포인트 반영은 구분한다.
 - `20_reaudit_required`는 재감사 완료 전 학습·평가·모델선택에 사용할 수 없다.
-- 이번 재감사에서 ISGL, UCI Character Trajectories, HWRT, BDSHWA는 모두 차단 상태를 유지했다.
+- ISGL, UCI Character Trajectories, 정제 HWRT, BDSHWA는 2026-08-10 용도 제한 조건으로 채택했다.
+- 외부 데이터는 box-local 문자 후보 학습에만 쓰고, 수식 grouping·ownership·관계·최종 결정은 프로젝트 보유 수식 데이터가 담당한다.
 - 비상업 데이터는 제품 학습에 사용하지 않는다.
 
 ## 공개물

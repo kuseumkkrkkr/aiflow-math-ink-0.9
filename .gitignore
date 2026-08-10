@@ -3,3 +3,5 @@ research/hf_home/
 research/pip_cache/
 research/pycache/
 research/python_deps/
+__pycache__/
+*.pyc
