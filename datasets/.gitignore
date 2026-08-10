@@ -1,0 +1,4 @@
+# Local source artifacts are intentionally retained on this workstation only.
+**/*.zip
+**/*.gz
+**/*.partial-invalid

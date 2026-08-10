@@ -1,6 +1,14 @@
-# AIFlow Math Ink 0.9 연구 릴리스
+# AIFlow Math Ink 1.0 연구 Fork
 
-온라인 수학 필기를 `형태/그리딩 → 문자 Top-k → 보수적 결정`으로 분리하는 AIFlow Math Ink 0.9 연구 후보입니다.
+온라인 수학 필기를 `원본 stroke → 형태/그리딩 → 문자 Top-k → 보수적 결정`으로 분리하는 상용 1.0 연구 트랙입니다. 이 저장소는 0.9 릴리스의 독립 Fork이며, 0.9 작업본을 변경하지 않습니다.
+
+## 1.0 데이터 정책
+
+- 데이터 카탈로그: [datasets/DATASET_CATALOG.md](datasets/DATASET_CATALOG.md)
+- 외부 원본은 `datasets/`에 출처·상태별로 분리한다. 압축 원본은 로컬 보관 대상이며 Git에 넣지 않는다.
+- `10_approved_external`만 문자 HWR 보조학습 후보이다.
+- `20_reaudit_required`는 재감사 완료 전 학습·평가·모델선택에 사용할 수 없다.
+- 비상업 데이터는 제품 학습에 사용하지 않는다.
 
 ## 공개물
 
