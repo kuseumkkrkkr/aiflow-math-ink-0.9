@@ -1,0 +1,5 @@
+# Research caches stay local and are pinned to D: by the audit commands.
+research/hf_home/
+research/pip_cache/
+research/pycache/
+research/python_deps/
