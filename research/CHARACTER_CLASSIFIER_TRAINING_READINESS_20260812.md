@@ -1,6 +1,6 @@
 # Character classifier training readiness
 
-Status: implementation and audit complete; model fitting has not started.
+Status: a two-epoch feasibility pilot is complete; the checkpoint is not product adopted. See `CHARACTER_CLASSIFIER_2EPOCH_PILOT_20260812.md`.
 
 ## Admission decisions
 
@@ -14,8 +14,8 @@ Status: implementation and audit complete; model fitting has not started.
   boundary or character-to-stroke ownership is available.
 - Treat HWRT labels as atomic source annotation units. Do not automatically
   split compositional LaTex labels such as `\\not\\equiv` or `\\sqrt{}`.
-- When fitting begins, correct HWRT frequency imbalance with a class-balanced
-  sampler plus capped loss weights. Do not add a predictive rebalancer: it
+- The feasibility pilot applies class-balanced sampling plus capped loss weights
+  to HWRT. Do not add a predictive rebalancer: it
   cannot create handwriting variation for rare classes and would bias priors.
 
 ## Tensor contract
@@ -39,7 +39,7 @@ sources: HWRT 16,574, UJI 1,159, ISGL 712, and UCI 278.
 The highest source stroke count is 43 (HWRT), below the fixed 128-point budget;
 every admitted source therefore retains at least one resampled point per stroke.
 
-## Evaluation protocol, after a predictor exists
+## Evaluation protocol and pilot boundary
 
 | Protocol | Scope | Metric | Evidence limit |
 |---|---|---|---|
@@ -49,5 +49,6 @@ every admitted source therefore retains at least one resampled point per stroke.
 | Current approved external data | Deterministic 10% per source and symbol, minimum one row | Symbol Top-1 and Top-5, reported by source | Technical holdout, not product evidence |
 
 `scripts/replay_evaluate_hwr_v1.py` writes point-by-point replay pages and
-scores supplied prediction JSONL. It cannot truthfully report accuracy until a
-predictor is trained and emits predictions.
+scores supplied prediction JSONL. The two-epoch checkpoint can score only
+box-local character protocols; formula-exact CROHME and canonical replay still
+require the absent grouping and decision pipeline.
