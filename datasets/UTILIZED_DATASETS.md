@@ -1,6 +1,6 @@
 # AIFlow Math Ink 1.0 utilized datasets
 
-Last updated: 2026-08-10
+Last updated: 2026-08-11
 
 ## Current checkpoint evidence
 
@@ -10,6 +10,27 @@ Last updated: 2026-08-10
 | CROHME2019 valid | Noncommercial regression evaluation only | 985 parseable formulas; never product training or product-performance evidence. |
 
 The current 0.9 checkpoint has not yet been retrained on the newly approved external pool below.
+
+## Canonical normalization derivative
+
+`datasets/normalized/v1/` is a local-only, reproducible model-input derivative;
+it is not committed and does not alter any raw archive. On 2026-08-11 the
+builder and a separate byte-identical replay check completed with 191,385
+records, 447,135 non-empty strokes, and 34,969,570 points.
+
+| Source | Canonical records | Time representation | Explicit exclusions |
+|---|---:|---|---:|
+| Project-owned valid formulas | 110 | relative duration | 0 |
+| UJI Pen v2 | 11,640 | ordinal point order; source has no point time | 0 |
+| ISGL inherited online derivative | 7,414 | ordinal point order; source has no point time | 0 |
+| UCI Character Trajectories | 2,858 | relative duration from documented 5 ms sampling | 0 |
+| Curated HWRT | 168,027 | relative duration; 664 zero-duration samples use ordinal order | 0 |
+| BDSHWA raw online CSV | 1,336 | relative duration; 34 stroke-clock-reset samples are duration-stitched | 12 no-pen-down files |
+
+The output keeps source stroke order, stores the bbox/letterbox transform, and
+uses unit-square X/Y plus unit-interval time. It never implies that external
+data can train formula grouping, ownership, relations, or final decisions.
+See `NORMALIZATION_V1.md` for the contract and exact command.
 
 ## Approved 1.0 training pool
 

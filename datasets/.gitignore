@@ -11,3 +11,4 @@
 **/range-test-*.bin
 **/raw/.cache/
 **/raw/.gitattributes
+normalized/
