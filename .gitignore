@@ -3,5 +3,8 @@ research/hf_home/
 research/pip_cache/
 research/pycache/
 research/python_deps/
+artifacts/hwr_replay_evaluation_v1/
+datasets/normalized/
+datasets/30_noncommercial_evaluation/crohme2019/
 __pycache__/
 *.pyc

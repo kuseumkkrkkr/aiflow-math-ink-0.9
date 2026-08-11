@@ -31,13 +31,13 @@ from scipy.io import loadmat
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = ROOT / "datasets" / "normalized" / "v1"
-DEFAULT_BDSHWA_NESTED = Path(
-    r"D:\AIFlow-Workspace\Temp\aiflow-normalization-audit-20260811\bdshwa_nested.zip"
-)
+DEFAULT_BDSHWA_ARCHIVE = ROOT / "datasets" / "10_approved_external" / "bdshwa" / "raw" / "bdshwa_v1.zip"
 SCHEMA = "aiflow-canonical-online-ink/v1"
 SPATIAL_RULE = "bbox-aspect-preserving-letterbox-unit-square/v1"
 TIME_RULE = "relative-duration-or-stitched-stroke-duration-or-ordinal-unit-interval/v1"
-SOURCE_ORDER = ("project_owned", "uji", "isgl", "uci", "hwrt", "bdshwa")
+CLASSIFIER_SOURCE_ORDER = ("project_owned", "uji", "isgl", "uci", "hwrt")
+AUDIT_SOURCE_ORDER = ("bdshwa",)
+SOURCE_ORDER = CLASSIFIER_SOURCE_ORDER + AUDIT_SOURCE_ORDER
 SOURCE_IDENTIFIERS = {
     "project_owned": "project_owned",
     "uji": "uji_pen_v2",
@@ -64,6 +64,7 @@ class SourceSample:
     strokes: list[list[tuple[float, float, float | None]]]
     time_scale_to_ms: float = 1.0
     extra: dict[str, Any] | None = None
+    deduplicate_consecutive_exact_xy: bool = False
 
 
 def _finite(value: Any) -> float:
@@ -103,8 +104,20 @@ def _point(stroke: Any, source: str) -> tuple[float, float, float | None]:
 def _canonicalize(sample: SourceSample) -> dict[str, Any]:
     cleaned: list[tuple[int, list[tuple[float, float, float | None]]]] = []
     dropped_empty: list[int] = []
+    removed_consecutive_exact_xy_points = 0
     for source_order, raw_stroke in enumerate(sample.strokes):
         points = [_point(point, sample.source) for point in raw_stroke]
+        if sample.deduplicate_consecutive_exact_xy:
+            deduplicated: list[tuple[float, float, float | None]] = []
+            for point in points:
+                if deduplicated and point[:2] == deduplicated[-1][:2]:
+                    # Retain the final timestamp so a real dwell remains in the
+                    # following delta-time interval without retaining zero-motion copies.
+                    deduplicated[-1] = point
+                    removed_consecutive_exact_xy_points += 1
+                else:
+                    deduplicated.append(point)
+            points = deduplicated
         if points:
             cleaned.append((source_order, points))
         else:
@@ -113,6 +126,8 @@ def _canonicalize(sample: SourceSample) -> dict[str, Any]:
         raise ValueError(f"empty_sample:{sample.source}:{sample.source_id}")
 
     flat = [point for _, stroke in cleaned for point in stroke]
+    if len(flat) < 2:
+        raise ValueError(f"insufficient_points:{sample.source}:{sample.source_id}")
     xs, ys = [point[0] for point in flat], [point[1] for point in flat]
     left, right, top, bottom = min(xs), max(xs), min(ys), max(ys)
     width, height = right - left, bottom - top
@@ -159,11 +174,28 @@ def _canonicalize(sample: SourceSample) -> dict[str, Any]:
         for x, y, t in points:
             nx = min(1.0, max(0.0, (x - left) * scale + pad_x))
             ny = min(1.0, max(0.0, (y - top) * scale + pad_y))
-            output_points.append([_round(nx), _round(ny), _round(normalized_times[global_index])])
-            raw_points.append([x, y, t])
+            output_point = [_round(nx), _round(ny), _round(normalized_times[global_index])]
+            if sample.deduplicate_consecutive_exact_xy and output_points and output_point[:2] == output_points[-1][:2]:
+                # Canonical rounding can make a near-identical source movement
+                # exactly equal. Coalesce it as well, keeping the final time.
+                output_points[-1] = output_point
+                raw_points[-1] = [x, y, t]
+                removed_consecutive_exact_xy_points += 1
+            else:
+                output_points.append(output_point)
+                raw_points.append([x, y, t])
             global_index += 1
         normalized_strokes.append({"source_order": source_order, "points": output_points})
         raw_strokes.append([source_order, raw_points])
+
+    final_points = [point for stroke in normalized_strokes for point in stroke["points"]]
+    if len(final_points) < 2:
+        raise ValueError(f"insufficient_points:{sample.source}:{sample.source_id}")
+    if sample.deduplicate_consecutive_exact_xy:
+        first_time, last_time = final_points[0][2], final_points[-1][2]
+        if last_time > first_time:
+            for point in final_points:
+                point[2] = _round((point[2] - first_time) / (last_time - first_time))
 
     record = {
         "schema": SCHEMA,
@@ -178,6 +210,7 @@ def _canonicalize(sample: SourceSample) -> dict[str, Any]:
             "time": TIME_RULE,
             "time_kind": time_kind,
             "source_time_available": has_provided_time,
+            "removed_consecutive_exact_xy_points": removed_consecutive_exact_xy_points,
         },
         "transform": {
             "bbox": {"left": _round(left), "top": _round(top), "right": _round(right), "bottom": _round(bottom)},
@@ -189,7 +222,7 @@ def _canonicalize(sample: SourceSample) -> dict[str, Any]:
         "source_stroke_count": len(sample.strokes),
         "dropped_empty_stroke_orders": dropped_empty,
         "stroke_count": len(normalized_strokes),
-        "point_count": len(flat),
+        "point_count": len(final_points),
         "strokes": normalized_strokes,
     }
     if sample.extra:
@@ -252,6 +285,7 @@ def _uci() -> Iterable[SourceSample]:
         yield SourceSample(
             "uci_character_trajectories", f"sample-{index}", str(labels[int(class_ids[index]) - 1]), "train",
             "single_writer_lowercase_representation_pretraining", [points], time_scale_to_ms=1000.0,
+            deduplicate_consecutive_exact_xy=True,
         )
 
 
@@ -259,10 +293,25 @@ def _truthy(value: str | None) -> bool:
     return str(value).strip().lower() in {"1", "1.0", "true"}
 
 
-def _bdshwa(nested: Path) -> Iterable[SourceSample]:
-    if not nested.is_file():
-        raise FileNotFoundError(f"BDSHWA nested ZIP is required: {nested}")
-    with zipfile.ZipFile(nested) as archive:
+@contextmanager
+def _bdshwa_csv_archive(path: Path) -> Iterator[zipfile.ZipFile]:
+    """Open either the supplied Raw_Data ZIP or its checked-in outer archive."""
+    if not path.is_file():
+        raise FileNotFoundError(f"BDSHWA archive is required: {path}")
+    with zipfile.ZipFile(path) as outer:
+        if any(name.startswith("Raw_Data/") and name.endswith(".csv") for name in outer.namelist()):
+            yield outer
+            return
+        for nested_name in sorted(name for name in outer.namelist() if name.endswith(".zip")):
+            with zipfile.ZipFile(io.BytesIO(outer.read(nested_name))) as nested:
+                if any(name.startswith("Raw_Data/") and name.endswith(".csv") for name in nested.namelist()):
+                    yield nested
+                    return
+    raise ValueError(f"BDSHWA Raw_Data ZIP was not found in: {path}")
+
+
+def _bdshwa(archive_path: Path) -> Iterable[SourceSample]:
+    with _bdshwa_csv_archive(archive_path) as archive:
         names = sorted(name for name in archive.namelist() if name.startswith("Raw_Data/") and name.endswith(".csv"))
         if len(names) != 1348:
             raise ValueError(f"unexpected BDSHWA raw CSV count: {len(names)}")
@@ -293,14 +342,14 @@ def _bdshwa(nested: Path) -> Iterable[SourceSample]:
             )
 
 
-def _sources(names: set[str], bdshwa_nested: Path) -> dict[str, Iterable[SourceSample]]:
+def _sources(names: set[str], bdshwa_archive: Path) -> dict[str, Iterable[SourceSample]]:
     factories: dict[str, Any] = {
         "project_owned": _project_owned,
         "uji": _uji,
         "isgl": _isgl,
         "uci": _uci,
         "hwrt": _hwrt,
-        "bdshwa": lambda: _bdshwa(bdshwa_nested),
+        "bdshwa": lambda: _bdshwa(bdshwa_archive),
     }
     unknown = names - factories.keys()
     if unknown:
@@ -338,14 +387,18 @@ def _write_source(output: Path, file_key: str, source: str, samples: Iterable[So
             try:
                 record = _canonicalize(sample)
             except ValueError as error:
-                if not str(error).startswith("empty_sample:"):
+                if str(error).startswith("empty_sample:"):
+                    reason = "empty_after_source_pen_down_filter"
+                elif str(error).startswith("insufficient_points:"):
+                    reason = "insufficient_points_for_character_trajectory"
+                else:
                     raise
                 rejection = {
                     "schema": "aiflow-canonical-online-ink-rejection/v1",
                     "record_id": _record_id(sample.source, sample.source_id),
                     "source": sample.source,
-                    "reason": "empty_after_source_pen_down_filter",
-                    "source_fingerprint": _digest([sample.source_id, "empty_after_source_pen_down_filter"]),
+                    "reason": reason,
+                    "source_fingerprint": _digest([sample.source_id, reason]),
                 }
                 if sample.extra:
                     rejection["task"] = sample.extra
@@ -386,24 +439,71 @@ def _write_source(output: Path, file_key: str, source: str, samples: Iterable[So
     return result
 
 
-def build(output: Path, names: set[str], bdshwa_nested: Path) -> dict[str, Any]:
+def _existing_entry(output: Path, source: str, prior: dict[str, Any]) -> dict[str, Any]:
+    """Rebuild manifest metadata after an interrupted local derivative write."""
+    path = output / str(prior["file"])
+    counts, labels = Counter(), Counter()
+    for row in _json_lines(path):
+        if row.get("schema") != SCHEMA or row.get("source") != source:
+            raise ValueError(f"schema/source mismatch while reconciling: {path}")
+        counts["records"] += 1
+        counts["strokes"] += int(row["stroke_count"])
+        counts["points"] += int(row["point_count"])
+        counts[f"time_{row['normalization']['time_kind']}"] += 1
+        counts[f"split_{row['split']}"] += 1
+        labels[str(row["label"])] += 1
+    result = {"file": path.name, "bytes": path.stat().st_size, "sha256": _sha256(path), "counts": dict(sorted(counts.items())), "labels": len(labels)}
+    rejection_path = output / path.name.replace(".jsonl.gz", "_rejections.jsonl.gz")
+    if rejection_path.is_file():
+        rows = list(_json_lines(rejection_path))
+        if any(row.get("schema") != "aiflow-canonical-online-ink-rejection/v1" or row.get("source") != source for row in rows):
+            raise ValueError(f"rejection schema/source mismatch while reconciling: {rejection_path}")
+        result["rejections"] = {"file": rejection_path.name, "bytes": rejection_path.stat().st_size, "sha256": _sha256(rejection_path), "count": len(rows)}
+    return result
+
+
+def reconcile_manifest(output: Path, drop_sources: set[str] | None = None) -> dict[str, Any]:
+    """Refresh only manifest metadata; it never changes a source or derivative row."""
+    output = output.resolve()
+    manifest_path = output / "manifest.json"
+    existing = json.loads(manifest_path.read_text(encoding="utf-8"))
+    dropped = {SOURCE_IDENTIFIERS.get(source, source) for source in (drop_sources or set())}
+    sources = {
+        source: _existing_entry(output, source, entry)
+        for source, entry in existing.get("sources", {}).items()
+        if source not in dropped
+    }
+    manifest = {
+        "schema": "aiflow-canonical-online-ink-manifest/v1",
+        "normalizer": {"spatial": SPATIAL_RULE, "time": TIME_RULE, "source_order": [name for name in SOURCE_ORDER if SOURCE_IDENTIFIERS[name] in sources]},
+        "sources": sources,
+    }
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
+    return manifest
+
+
+def build(output: Path, names: set[str], bdshwa_archive: Path, prune_unselected: bool = False, drop_sources: set[str] | None = None) -> dict[str, Any]:
     output = output.resolve()
     if output.drive.upper() != "D:":
         raise ValueError(f"normalization output must remain on D:: {output}")
     output.mkdir(parents=True, exist_ok=True)
     manifest_path = output / "manifest.json"
     existing = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {}
-    files = {
+    dropped = {SOURCE_IDENTIFIERS.get(source, source) for source in (drop_sources or set())}
+    if names & (drop_sources or set()):
+        raise ValueError("a source cannot be rebuilt and dropped in one command")
+    files = {} if prune_unselected else {
         SOURCE_IDENTIFIERS.get(source, source): entry
         for source, entry in existing.get("sources", {}).items()
+        if SOURCE_IDENTIFIERS.get(source, source) not in dropped
     }
     files.update({
         SOURCE_IDENTIFIERS[file_key]: _write_source(output, file_key, SOURCE_IDENTIFIERS[file_key], samples)
-        for file_key, samples in _sources(names, bdshwa_nested).items()
+        for file_key, samples in _sources(names, bdshwa_archive).items()
     })
     manifest = {
         "schema": "aiflow-canonical-online-ink-manifest/v1",
-        "normalizer": {"spatial": SPATIAL_RULE, "time": TIME_RULE, "source_order": list(SOURCE_ORDER)},
+        "normalizer": {"spatial": SPATIAL_RULE, "time": TIME_RULE, "source_order": [name for name in SOURCE_ORDER if SOURCE_IDENTIFIERS[name] in files]},
         "sources": files,
     }
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
@@ -436,12 +536,14 @@ def verify(output: Path) -> dict[str, Any]:
             if orders != sorted(orders) or len(orders) != len(set(orders)):
                 raise AssertionError(f"stroke order mismatch: {row['record_id']}")
             points = [point for stroke in row["strokes"] for point in stroke["points"]]
-            if len(points) != row["point_count"] or not points:
+            if len(points) != row["point_count"] or len(points) < 2:
                 raise AssertionError(f"point count mismatch: {row['record_id']}")
             if any(len(point) != 3 or not all(math.isfinite(float(value)) and 0.0 <= float(value) <= 1.0 for value in point) for point in points):
                 raise AssertionError(f"out-of-range canonical point: {row['record_id']}")
             if points[0][2] != 0.0 or (len(points) > 1 and points[-1][2] != 1.0):
                 raise AssertionError(f"time endpoint mismatch: {row['record_id']}")
+            if not isinstance(row["normalization"].get("removed_consecutive_exact_xy_points"), int):
+                raise AssertionError(f"deduplication metadata missing: {row['record_id']}")
             local["records"] += 1; local["strokes"] += row["stroke_count"]; local["points"] += row["point_count"]
             local[f"time_{row['normalization']['time_kind']}"] += 1; local[f"split_{row['split']}"] += 1
         expected_counts = {key: value for key, value in expected["counts"].items() if not key.startswith("split_")}
@@ -471,13 +573,24 @@ def _self_test() -> None:
     assert first["strokes"][-1]["points"][-1] == [1.0, 1.0, 1.0]
     stitched = _canonicalize(SourceSample("test", "B", "x", "train", "test", [[(0, 0, 10), (1, 0, 12)], [(1, 1, 5), (1, 2, 9)]]))
     assert stitched["normalization"]["time_kind"] == "stitched_stroke_duration"
+    deduplicated = _canonicalize(SourceSample("test", "C", "x", "train", "test", [[(0, 0, 1), (0, 0, 2), (1, 0, 3)]], deduplicate_consecutive_exact_xy=True))
+    assert deduplicated["normalization"]["removed_consecutive_exact_xy_points"] == 1
+    rounded_duplicate = _canonicalize(SourceSample("test", "E", "x", "train", "test", [[(0, 0, 1), (1e-10, 0, 2), (1, 1, 3)]], deduplicate_consecutive_exact_xy=True))
+    assert rounded_duplicate["normalization"]["removed_consecutive_exact_xy_points"] == 1
+    assert rounded_duplicate["strokes"][0]["points"][0][2] == 0.0
+    try:
+        _canonicalize(SourceSample("test", "D", "x", "train", "test", [[(0, 0, 1)]]))
+    except ValueError as error:
+        assert str(error).startswith("insufficient_points:")
+    else:
+        raise AssertionError("one-point trajectory was accepted")
 
 
-def _deterministic_replay(output: Path, names: set[str], bdshwa_nested: Path) -> None:
+def _deterministic_replay(output: Path, names: set[str], bdshwa_archive: Path, prune_unselected: bool = False, drop_sources: set[str] | None = None) -> None:
     parent = output.resolve().parent
     replay = Path(tempfile.mkdtemp(prefix=".normalization-replay-", dir=parent))
     try:
-        replay_manifest = build(replay, names, bdshwa_nested)
+        replay_manifest = build(replay, names, bdshwa_archive, prune_unselected=prune_unselected, drop_sources=drop_sources)
         original = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
         if original != replay_manifest:
             raise AssertionError("normalization replay manifest differs")
@@ -488,10 +601,13 @@ def _deterministic_replay(output: Path, names: set[str], bdshwa_nested: Path) ->
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
-    parser.add_argument("--sources", default=",".join(SOURCE_ORDER), help="comma-separated source names")
-    parser.add_argument("--bdshwa-nested", type=Path, default=DEFAULT_BDSHWA_NESTED)
+    parser.add_argument("--sources", default=",".join(CLASSIFIER_SOURCE_ORDER), help="comma-separated source names")
+    parser.add_argument("--bdshwa-archive", type=Path, default=DEFAULT_BDSHWA_ARCHIVE)
     parser.add_argument("--verify-only", action="store_true")
     parser.add_argument("--migrate-manifest", action="store_true")
+    parser.add_argument("--reconcile-manifest", action="store_true", help="refresh hashes and counts from existing local derivative files without rewriting rows")
+    parser.add_argument("--prune-unselected", action="store_true", help="drop unselected sources from the manifest; raw archives remain untouched")
+    parser.add_argument("--drop-sources", default="", help="comma-separated source keys to remove from the manifest without touching raw archives")
     parser.add_argument("--deterministic-replay", action="store_true")
     parser.add_argument("--deterministic-replay-only", action="store_true")
     parser.add_argument("--self-test", action="store_true")
@@ -499,20 +615,24 @@ def main() -> int:
     if args.self_test:
         _self_test(); print(json.dumps({"self_test": "pass"})); return 0
     names = {part.strip() for part in args.sources.split(",") if part.strip()}
+    drop_sources = {part.strip() for part in args.drop_sources.split(",") if part.strip()}
     if args.verify_only:
         print(json.dumps(verify(args.output), ensure_ascii=False, sort_keys=True)); return 0
+    if args.reconcile_manifest:
+        reconcile_manifest(args.output, drop_sources=drop_sources)
+        print(json.dumps(verify(args.output), ensure_ascii=False, sort_keys=True)); return 0
     if args.migrate_manifest:
-        build(args.output, set(), args.bdshwa_nested)
+        build(args.output, set(), args.bdshwa_archive, drop_sources=drop_sources)
         print(json.dumps(verify(args.output), ensure_ascii=False, sort_keys=True)); return 0
     if args.deterministic_replay_only:
         result = verify(args.output)
-        _deterministic_replay(args.output, names, args.bdshwa_nested)
+        _deterministic_replay(args.output, names, args.bdshwa_archive, prune_unselected=args.prune_unselected, drop_sources=drop_sources)
         result["deterministic_replay"] = "pass"
         print(json.dumps(result, ensure_ascii=False, sort_keys=True)); return 0
-    build(args.output, names, args.bdshwa_nested)
+    build(args.output, names, args.bdshwa_archive, prune_unselected=args.prune_unselected, drop_sources=drop_sources)
     result = verify(args.output)
     if args.deterministic_replay:
-        _deterministic_replay(args.output, names, args.bdshwa_nested)
+        _deterministic_replay(args.output, names, args.bdshwa_archive, prune_unselected=args.prune_unselected, drop_sources=drop_sources)
         result["deterministic_replay"] = "pass"
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
     return 0

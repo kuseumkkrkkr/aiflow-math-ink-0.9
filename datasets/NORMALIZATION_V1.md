@@ -43,3 +43,20 @@ in `UTILIZED_DATASETS.md`. It does not turn isolated external trajectories into
 formula grouping, ownership, relation, or final-decision labels. Project-owned
 formula samples remain `unassigned_project_holdout` until a writer-holdout split
 is generated.
+
+## Character-classifier admission amendment (2026-08-12)
+
+- A trajectory with fewer than two points is a missing character trajectory,
+  not a shape to upsample. It is excluded from the canonical derivative with a
+  hashed rejection record. The raw source stays unchanged.
+- UCI removes only consecutive points whose X and Y are exactly equal, both
+  before and after canonical coordinate rounding. The final timestamp of the
+  duplicate run is retained, so the next delta-time interval preserves dwell.
+  Non-consecutive return-to-point loops remain.
+- The default classifier derivative contains project-owned, UJI, ISGL, UCI,
+  and HWRT only. BDSHWA is excluded because it has whole-task prompts and
+  stroke IDs but no character boundary or character-to-stroke ownership.
+- Canonical files remain variable-length `[x, y, t]` ink. The future classifier
+  obtains `128 x 5` tensors through `scripts/character_tensor_v1.py`, using
+  per-stroke arc-length resampling and the channels `x`, `y`, `delta_t`,
+  `stroke_start`, and `observed`.

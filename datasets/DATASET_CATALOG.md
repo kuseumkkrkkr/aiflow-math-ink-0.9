@@ -9,7 +9,7 @@ Last verified: 2026-08-10 (adoption amendment)
 | `10_approved_external/isgl_online_offline_hwr/` | ISGL | Approved external / restricted | Online English letters, digits, and word trajectory pretraining; training pool only | Original ZIP and inherited 7,414-row derivative |
 | `10_approved_external/uci_character_trajectories/` | UCI Character Trajectories | Approved external / single writer | Lowercase Latin single-stroke representation pretraining; training pool only | Official source ZIP |
 | `10_approved_external/hwrt/` | HWRT / Detexify | Approved external / curated | Box-local mathematical-symbol candidate pretraining; never model selection or final evaluation | Official TAR and filtered derivative |
-| `10_approved_external/bdshwa/` | BDSHWA | Approved external / restricted | Future general online-HWR and English/Bengali expansion from raw trajectories only | Original Mendeley ZIP |
+| `10_approved_external/bdshwa/` | BDSHWA | Rejected for 1.0 character classifier / raw retained | No classifier, tensor, or evaluation role | Original Mendeley ZIP retained as audit evidence |
 | `20_reaudit_required/hf_cli_unlicensed/` | Three `newbienewbie` trajectory repos | Rejected | Audit evidence only | D-pinned Hugging Face CLI downloads |
 | `30_noncommercial_evaluation/` | CROHME/MathWriting-class data | Research-only | Frozen external regression evaluation only | Never copy into product-training folders |
 
@@ -37,5 +37,5 @@ Approval means that a dataset may enter the stated 1.0 training pool. It does no
 2. In the current Math Ink path, external corpora train only the role named above. They cannot supervise formula grouping, stroke ownership, spatial relations, or the final decision layer. A future general text-HWR branch is a separate model scope.
 3. UCI is explicitly one-writer training data. ISGL's inherited derivative is training-only until rebuilt from the complete source with an exclusion manifest.
 4. HWRT timestamps are relative in the derivative, time-reversing samples and normalized duplicates are removed, and browser user agents/raw user IDs are absent. Its source user IDs do not prove writer identity, so HWRT cannot select or evaluate models.
-5. BDSHWA demographic, writer-identification, age, gender, and biometric targets/metadata are excluded. Only raw online trajectories may be used for general HWR expansion.
+5. BDSHWA is excluded from the 1.0 character-classifier corpus because it lacks character boundaries and character-to-stroke ownership. Its demographic, writer-identification, age, gender, and biometric targets/metadata remain excluded in all cases.
 6. Every release must carry the source attribution and applicable CC BY 4.0 or ODbL notices. Model adoption still requires project-owned writer-holdout and non-regression gates.

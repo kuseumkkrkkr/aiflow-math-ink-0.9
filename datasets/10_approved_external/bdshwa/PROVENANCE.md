@@ -1,6 +1,9 @@
 # BDSHWA provenance and approved use
 
-Audited 2026-08-10 from Mendeley Data version 1. The CC BY 4.0 raw online trajectories are admitted to the restricted AIFlow Math Ink 1.0 external training pool for future non-formula HWR expansion by project-owner decision on 2026-08-10.
+Audited 2026-08-10 from Mendeley Data version 1. The CC BY 4.0 raw online
+trajectories were initially considered for restricted non-formula HWR expansion.
+The 2026-08-12 character-classifier re-audit below supersedes that scope for
+AIFlow Math Ink 1.0: the archive is retained for audit only.
 
 ## Source and integrity
 
@@ -32,10 +35,20 @@ The outer archive contains two 727 MB nested ZIPs. Both nested ZIPs pass full CR
 
 ## Adopted scope and exclusions
 
-1. Use only raw online trajectories for general HWR representation and English/Bengali character, word, or sentence expansion.
+1. Historical consideration only: raw online trajectories were considered for general HWR representation and English/Bengali character, word, or sentence expansion. This is superseded for the current 1.0 character classifier.
 2. Exclude participant metadata, processed forensic features, writer-identification labels, demographics, age, gender, and biometric objectives from every training manifest.
 3. The `P012`/`P010` metadata collision does not enter training because all participant metadata is excluded.
 4. It does not provide mathematical symbols, formula structure, stroke ownership, or relation labels and therefore cannot supervise those components.
 5. Preserve source attribution, the stated no-reidentification/no-surveillance restrictions, and the CC BY 4.0 notice.
 
-Decision: **APPROVED EXTERNAL / RESTRICTED - raw online HWR trajectories only; all identity and biometric uses remain prohibited.**
+## Character-classifier re-audit (2026-08-12)
+
+The raw CSV schema has only whole-task prompt/context fields and pen-down
+stroke IDs. It has no character boundary, character label, or
+character-to-stroke ownership field. Its 1,348 raw task files include
+freehand, shape, wave, and topic tasks that do not have a character transcript.
+
+Decision: **REJECTED FOR AIFlow Math Ink 1.0 CHARACTER CLASSIFIER.** The raw
+archive remains retained for audit only; it must not enter tensor generation,
+training, or evaluation. All identity and biometric restrictions remain in
+force.

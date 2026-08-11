@@ -1,6 +1,19 @@
 # AIFlow Math Ink 1.0 utilized datasets
 
-Last updated: 2026-08-11
+Last updated: 2026-08-12
+
+## Character-classifier admission amendment (2026-08-12)
+
+The classifier-only derivative now contains 189,334 records, 351,140 strokes,
+and 28,054,726 points across five sources. One-point trajectories are rejected
+as missing data: 664 HWRT, 49 UJI, and 2 ISGL records. UCI removes 138,695
+consecutive exact X/Y duplicates (138,636 raw plus 59 after canonical rounding)
+while preserving return-to-point loops.
+
+BDSHWA is excluded from the character-classifier corpus. Its raw files provide
+whole-task prompts and stroke IDs, but no character boundary, character label,
+or character-to-stroke ownership. The raw archive remains local audit evidence
+only and is not a tensor, training, or evaluation input.
 
 ## Current checkpoint evidence
 
@@ -25,7 +38,6 @@ records, 447,135 non-empty strokes, and 34,969,570 points.
 | ISGL inherited online derivative | 7,414 | ordinal point order; source has no point time | 0 |
 | UCI Character Trajectories | 2,858 | relative duration from documented 5 ms sampling | 0 |
 | Curated HWRT | 168,027 | relative duration; 664 zero-duration samples use ordinal order | 0 |
-| BDSHWA raw online CSV | 1,336 | relative duration; 34 stroke-clock-reset samples are duration-stitched | 12 no-pen-down files |
 
 The output keeps source stroke order, stores the bbox/letterbox transform, and
 uses unit-square X/Y plus unit-interval time. It never implies that external
@@ -40,16 +52,17 @@ See `NORMALIZATION_V1.md` for the contract and exact command.
 | ISGL | 7,985 characters plus 3,790 words from 64 source writer IDs | English uppercase/lowercase, digits, and word-level trajectory expansion | Online data only; no per-point time; inherited derivative has 7,414 character rows and is training-only |
 | UCI Character Trajectories | 2,858 samples, 20 lowercase Latin labels, one writer | Single-stroke representation pretraining | Treat as one-writer training data; never validation or model selection |
 | HWRT / Detexify curated | 168,027 samples, 369 math-symbol labels, 317,996 strokes, 25,393,124 points | Box-local mathematical-symbol candidate pretraining | 193 reversing samples and 13 normalized duplicates removed; source user IDs are not reliable writer identities, so no model selection/final evaluation |
-| BDSHWA | 1,348 raw trajectory CSV files across 29 participant folders | Future non-formula online HWR and English/Bengali text expansion | Exclude all demographic, identity, age, gender, and forensic-biometric targets and metadata |
+| BDSHWA | 1,348 raw trajectory CSV files across 29 participant folders | Excluded from the 1.0 character-classifier corpus | No character boundaries or character-to-stroke ownership; raw archive retained only for audit |
 
 ## Not used for product training
 
 - Three Hugging Face `newbienewbie` trajectory datasets: rejected for missing licence/provenance and split leakage.
 - CROHME and MathWriting-class corpora: noncommercial research evaluation only.
+- BDSHWA: excluded from character-classifier training and evaluation because its labels are whole-task prompts, not character targets.
 - BDSHWA processed biometric feature tables and participant metadata: excluded even though raw trajectories are approved for the restricted HWR role.
 
 ## Layer boundary
 
 Within the current Math Ink model, external isolated-character or text corpora may improve only the box-local stroke encoder and character Top-k candidates. Formula grouping, stroke ownership, spatial relations, and final decisions remain supervised by project-owned formula data and validated through the existing holdout/regression gates.
 
-BDSHWA and ISGL word-level material may later support a separate general text-HWR branch. That future branch must keep its sequence/text objectives separate from mathematical formula layout and decision responsibilities.
+ISGL word-level material may later support a separate general text-HWR branch. That future branch must keep its sequence/text objectives separate from mathematical formula layout and decision responsibilities.
