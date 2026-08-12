@@ -32,11 +32,17 @@ from replay_evaluate_hwr_v1 import score_glyphs_from_rows
 
 DEFAULT_CANONICAL_ROOT = ROOT / "datasets" / "normalized" / "v1"
 DEFAULT_OUTPUT = ROOT / "artifacts" / "character_classifier_v1_pilot_2ep"
-CACHE_SCHEMA = "aiflow-character-classifier-cache/v1"
-PILOT_SCHEMA = "aiflow-character-classifier-two-epoch-pilot/v1"
+CACHE_SCHEMA = "aiflow-character-classifier-cache/v2"
+PILOT_SCHEMA = "aiflow-character-classifier-two-epoch-pilot/v2"
 SOURCE_HEAD = {"hwrt": "math", "uji": "auxiliary", "isgl": "auxiliary", "uci": "auxiliary"}
 EXTRA_MATH_LABELS = ("(", ")", "=")
+# UJI provides commercial isolated examples for these exact math tokens.  They
+# train the deployed math head, not the auxiliary pretraining head, so each
+# source record has one target head and one evaluation prediction.
+MATH_TRANSFERRED_AUXILIARY_LABELS = frozenset({"(", ")"})
 EPOCHS = 2
+WEIGHT_DECAY = 1e-2
+BALANCE_MODES = ("sampler-and-loss", "sampler", "loss", "none")
 
 
 def _sha256(path: Path) -> str:
@@ -53,16 +59,25 @@ def _labels(path: Path) -> list[str]:
 
 def load_vocabs(canonical_root: Path) -> tuple[list[str], list[str]]:
     math_labels = _labels(canonical_root / "hwrt.jsonl.gz")
-    aux_labels = _labels(canonical_root / "uji.jsonl.gz")
+    all_uji_labels = _labels(canonical_root / "uji.jsonl.gz")
+    aux_labels = sorted(set(all_uji_labels) - MATH_TRANSFERRED_AUXILIARY_LABELS)
     if len(math_labels) != 369 or any(label in math_labels for label in EXTRA_MATH_LABELS):
         raise ValueError("unexpected HWRT math vocabulary")
-    if len(aux_labels) != 97:
+    if len(all_uji_labels) != 97 or len(aux_labels) != 95:
         raise ValueError("unexpected UJI auxiliary vocabulary")
+    if not MATH_TRANSFERRED_AUXILIARY_LABELS <= set(all_uji_labels) or not MATH_TRANSFERRED_AUXILIARY_LABELS <= set(EXTRA_MATH_LABELS):
+        raise ValueError("math transfer labels are not available in both vocabularies")
     for corpus in ("isgl", "uci"):
         missing = set(_labels(canonical_root / f"{corpus}.jsonl.gz")) - set(aux_labels)
         if missing:
             raise ValueError(f"{corpus} labels are outside UJI auxiliary vocabulary: {sorted(missing)}")
     return math_labels + list(EXTRA_MATH_LABELS), aux_labels
+
+
+def _head_for_row(corpus: str, label: str) -> str:
+    if corpus == "uji" and label in MATH_TRANSFERRED_AUXILIARY_LABELS:
+        return "math"
+    return SOURCE_HEAD[corpus]
 
 
 class InkClassifierV1(nn.Module):
@@ -131,10 +146,11 @@ def _holdout_ids(canonical_root: Path) -> set[str]:
 
 
 def _iter_external_rows(canonical_root: Path, holdout_ids: set[str], label_indices: dict[str, dict[str, int]]) -> Iterator[tuple[str, dict, dict]]:
-    for corpus, head in SOURCE_HEAD.items():
+    for corpus in SOURCE_HEAD:
         for row in _json_lines(canonical_root / f"{corpus}.jsonl.gz"):
             record_id = f"{corpus}:{row['record_id']}"
             label = str(row["label"])
+            head = _head_for_row(corpus, label)
             if label not in label_indices[head]:
                 raise ValueError(f"unmapped label: {corpus}:{label}")
             split = "eval" if record_id in holdout_ids else "train"
@@ -156,6 +172,7 @@ def _cache_config(canonical_root: Path, holdout_path: Path, math_labels: list[st
         "channels": list(CHANNELS),
         "math_labels": math_labels,
         "auxiliary_labels": aux_labels,
+        "math_transferred_auxiliary_labels": sorted(MATH_TRANSFERRED_AUXILIARY_LABELS),
     }
 
 
@@ -238,17 +255,30 @@ def _dataset(cache_dir: Path, item: dict) -> NpyDataset:
     return NpyDataset(cache_dir / item["features"], cache_dir / item["labels"])
 
 
-def _class_balanced_loader(dataset: NpyDataset, batch_size: int, seed: int, classes: int, pin_memory: bool) -> tuple[DataLoader, torch.Tensor]:
+def _balance_flags(mode: str) -> tuple[bool, bool]:
+    if mode not in BALANCE_MODES:
+        raise ValueError(f"unknown balance mode: {mode}")
+    return mode in {"sampler-and-loss", "sampler"}, mode in {"sampler-and-loss", "loss"}
+
+
+def _class_balanced_loader(dataset: NpyDataset, batch_size: int, seed: int, classes: int, pin_memory: bool, balance_mode: str) -> tuple[DataLoader, torch.Tensor]:
     labels = np.asarray(dataset.labels, dtype=np.int64)
     counts = np.bincount(labels, minlength=classes).astype(np.float64)
     if not len(labels) or not np.all(counts[labels] > 0):
         raise ValueError("invalid training labels")
-    sampler_weights = torch.as_tensor(1.0 / counts[labels], dtype=torch.double)
-    sampler = WeightedRandomSampler(sampler_weights, num_samples=len(labels), replacement=True, generator=torch.Generator().manual_seed(seed))
+    use_sampler, use_loss_weights = _balance_flags(balance_mode)
     observed = counts > 0
     loss_weights = np.ones(classes, dtype=np.float32)
-    loss_weights[observed] = np.clip(counts[observed].mean() / counts[observed], 0.25, 4.0)
-    return DataLoader(dataset, batch_size=batch_size, sampler=sampler, num_workers=0, pin_memory=pin_memory), torch.from_numpy(loss_weights)
+    if use_loss_weights:
+        loss_weights[observed] = np.clip(counts[observed].mean() / counts[observed], 0.25, 4.0)
+    generator = torch.Generator().manual_seed(seed)
+    if use_sampler:
+        sampler_weights = torch.as_tensor(1.0 / counts[labels], dtype=torch.double)
+        sampler = WeightedRandomSampler(sampler_weights, num_samples=len(labels), replacement=True, generator=generator)
+        loader = DataLoader(dataset, batch_size=batch_size, sampler=sampler, num_workers=0, pin_memory=pin_memory)
+    else:
+        loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, generator=generator, num_workers=0, pin_memory=pin_memory)
+    return loader, torch.from_numpy(loss_weights)
 
 
 def _seed_everything(seed: int) -> None:
@@ -330,10 +360,16 @@ def _write_predictions(path: Path, predictions: dict[str, dict]) -> None:
 
 
 def _self_test() -> None:
-    model = InkClassifierV1(372, 97)
+    model = InkClassifierV1(372, 95)
     points = torch.zeros(2, POINTS, len(CHANNELS))
     assert model(points, "math").shape == (2, 372)
-    assert model(points, "auxiliary").shape == (2, 97)
+    assert model(points, "auxiliary").shape == (2, 95)
+    assert _balance_flags("sampler-and-loss") == (True, True)
+    assert _balance_flags("sampler") == (True, False)
+    assert _balance_flags("loss") == (False, True)
+    assert _balance_flags("none") == (False, False)
+    assert _head_for_row("uji", "(") == "math"
+    assert _head_for_row("uji", "A") == "auxiliary"
 
 
 def main() -> int:
@@ -344,6 +380,8 @@ def main() -> int:
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--eval-batch-size", type=int, default=256)
     parser.add_argument("--learning-rate", type=float, default=3e-4)
+    parser.add_argument("--balance-mode", choices=BALANCE_MODES, default="sampler")
+    parser.add_argument("--cache-dir", type=Path, help="reuse a compatible D: cache across controlled trials")
     parser.add_argument("--seed", type=int, default=20260812)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--log-every", type=int, default=250)
@@ -358,6 +396,9 @@ def main() -> int:
     output = args.output.resolve()
     if output.drive.upper() != "D:":
         parser.error(f"output must remain on D:: {output}")
+    cache_dir = args.cache_dir.resolve() if args.cache_dir else output / "cache"
+    if cache_dir.drive.upper() != "D:":
+        parser.error(f"cache must remain on D:: {cache_dir}")
     if (output / "two_epoch_checkpoint.pt").exists():
         parser.error(f"pilot checkpoint already exists: {output}; choose a fresh --output path")
     if args.device == "cuda" and not torch.cuda.is_available():
@@ -366,23 +407,23 @@ def main() -> int:
     _seed_everything(args.seed)
     output.mkdir(parents=True, exist_ok=True)
     math_labels, aux_labels = load_vocabs(args.canonical_root)
-    cache = prepare_cache(args.canonical_root, output / "cache", math_labels, aux_labels)
+    cache = prepare_cache(args.canonical_root, cache_dir, math_labels, aux_labels)
     math_index = {label: index for index, label in enumerate(math_labels)}
-    math_train = _dataset(output / "cache", cache["sets"]["math_train"])
-    aux_train = _dataset(output / "cache", cache["sets"]["auxiliary_train"])
-    math_eval = _dataset(output / "cache", cache["sets"]["math_eval"])
-    aux_eval = _dataset(output / "cache", cache["sets"]["auxiliary_eval"])
-    math_truth = _read_truth(output / "cache" / cache["sets"]["math_eval"]["truth"])
-    aux_truth = _read_truth(output / "cache" / cache["sets"]["auxiliary_eval"]["truth"])
+    math_train = _dataset(cache_dir, cache["sets"]["math_train"])
+    aux_train = _dataset(cache_dir, cache["sets"]["auxiliary_train"])
+    math_eval = _dataset(cache_dir, cache["sets"]["math_eval"])
+    aux_eval = _dataset(cache_dir, cache["sets"]["auxiliary_eval"])
+    math_truth = _read_truth(cache_dir / cache["sets"]["math_eval"]["truth"])
+    aux_truth = _read_truth(cache_dir / cache["sets"]["auxiliary_eval"]["truth"])
     direct_eval, direct_truth = direct_ownership_dataset(args.canonical_root, math_index)
-    math_loader, math_weights = _class_balanced_loader(math_train, args.batch_size, args.seed, len(math_labels), device.type == "cuda")
-    aux_loader, aux_weights = _class_balanced_loader(aux_train, args.batch_size, args.seed + 1, len(aux_labels), device.type == "cuda")
+    math_loader, math_weights = _class_balanced_loader(math_train, args.batch_size, args.seed, len(math_labels), device.type == "cuda", args.balance_mode)
+    aux_loader, aux_weights = _class_balanced_loader(aux_train, args.batch_size, args.seed + 1, len(aux_labels), device.type == "cuda", args.balance_mode)
     model = InkClassifierV1(len(math_labels), len(aux_labels)).to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=1e-2)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=WEIGHT_DECAY)
     scaler = torch.amp.GradScaler(device.type, enabled=device.type == "cuda")
     math_weights = math_weights.to(device)
     aux_weights = aux_weights.to(device)
-    print(json.dumps({"event": "pilot_start", "device": str(device), "epochs": EPOCHS, "math_train": len(math_train), "auxiliary_train": len(aux_train), "external_holdout": len(math_eval) + len(aux_eval), "direct_ownership": len(direct_eval)}, ensure_ascii=False), flush=True)
+    print(json.dumps({"event": "pilot_start", "device": str(device), "epochs": EPOCHS, "learning_rate": args.learning_rate, "balance_mode": args.balance_mode, "math_train": len(math_train), "auxiliary_train": len(aux_train), "external_holdout": len(math_eval) + len(aux_eval), "direct_ownership": len(direct_eval)}, ensure_ascii=False), flush=True)
     history = []
     started = time.perf_counter()
     for epoch in range(1, EPOCHS + 1):
@@ -403,8 +444,9 @@ def main() -> int:
         "trained_epochs": EPOCHS,
         "device": str(device),
         "seed": args.seed,
+        "optimization": {"optimizer": "AdamW", "learning_rate": args.learning_rate, "weight_decay": WEIGHT_DECAY, "balance_mode": args.balance_mode, "gradient_clip_norm": 1.0, "scheduler": "none", "warmup_steps": 0},
         "architecture": {"input": [POINTS, len(CHANNELS)], "projection": [len(CHANNELS), 128], "transformer_blocks": 4, "hidden": 128, "attention_heads": 4, "math_head": len(math_labels), "auxiliary_head": len(aux_labels)},
-        "data_admission": {"train_sources": SOURCE_HEAD, "project_owned_training": False, "bdshwa_training": False, "crohme_training": False, "holdout_fixed_before_training": True},
+        "data_admission": {"train_sources": SOURCE_HEAD, "math_transferred_auxiliary_labels": sorted(MATH_TRANSFERRED_AUXILIARY_LABELS), "project_owned_training": False, "bdshwa_training": False, "crohme_training": False, "holdout_fixed_before_training": True},
         "cache": cache,
         "history": history,
         "external_holdout": external_score,

@@ -1,8 +1,11 @@
 # Character classifier two-epoch feasibility pilot
 
-Status: completed on 2026-08-12; not product adopted.
+Status: completed on 2026-08-12; not product adopted. This is the historical
+double-balanced control, not the current tuning default. See
+`CHARACTER_CLASSIFIER_TUNING_20260812.md` for the selected sampler-only
+configuration and its limits.
 
-## Fixed run
+## Historical fixed run
 
 - Exactly two epochs, CUDA GTX 1650 (4 GB), batch size 64, AdamW `3e-4`.
 - Fixed architecture: `128 x 5` input, `5 -> 128`, four 128-wide
@@ -13,6 +16,8 @@ Status: completed on 2026-08-12; not product adopted.
   formulas / 211 groups, CROHME, BDSHWA, and direct canonical replay were not
   training input.
 - Class-balanced sampling and capped inverse-frequency loss weights were used.
+  This is retained as a reproducible control only; later tuning found the two
+  frequency corrections together were counterproductive.
 
 ## Optimization result
 

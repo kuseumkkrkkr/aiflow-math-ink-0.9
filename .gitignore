@@ -5,6 +5,7 @@ research/pycache/
 research/python_deps/
 artifacts/hwr_replay_evaluation_v1/
 artifacts/character_classifier_v1_pilot_2ep/
+artifacts/tuning_lr_20260812/
 datasets/normalized/
 datasets/30_noncommercial_evaluation/crohme2019/
 __pycache__/

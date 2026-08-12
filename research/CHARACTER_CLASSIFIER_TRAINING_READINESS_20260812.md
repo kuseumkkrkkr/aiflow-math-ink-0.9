@@ -1,6 +1,8 @@
 # Character classifier training readiness
 
-Status: a two-epoch feasibility pilot is complete; the checkpoint is not product adopted. See `CHARACTER_CLASSIFIER_2EPOCH_PILOT_20260812.md`.
+Status: the historical two-epoch feasibility pilot and a fixed-split tuning
+loop are complete; neither checkpoint is product adopted. The current research
+default and its evidence are in `CHARACTER_CLASSIFIER_TUNING_20260812.md`.
 
 ## Admission decisions
 
@@ -14,9 +16,23 @@ Status: a two-epoch feasibility pilot is complete; the checkpoint is not product
   boundary or character-to-stroke ownership is available.
 - Treat HWRT labels as atomic source annotation units. Do not automatically
   split compositional LaTex labels such as `\\not\\equiv` or `\\sqrt{}`.
-- The feasibility pilot applies class-balanced sampling plus capped loss weights
-  to HWRT. Do not add a predictive rebalancer: it
-  cannot create handwriting variation for rare classes and would bias priors.
+- The historical feasibility baseline applied both class-balanced sampling and
+  capped loss weights to HWRT. The tuning loop found this was double
+  correction; the current research default uses the sampler only. Do not add a
+  predictive rebalancer: it cannot create handwriting variation for rare
+  classes and would bias priors.
+
+## Tuning amendment
+
+- UJI `(` and `)` now route to the 372-class math head, not the auxiliary
+  head. This preserves one target head per source row and reduces the
+  auxiliary vocabulary from 97 to 95 labels.
+- `=` remains an output but has no real admitted training row. Synthetic
+  equals generated from dashes were tested and rejected; they are not present
+  in the current pipeline.
+- The fixed raw and normalized datasets remain unchanged. The selected cache
+  is a local, D:-resident v2 derivative and is reproducible only when its
+  manifest matches the pinned canonical manifest and holdout IDs.
 
 ## Tensor contract
 
