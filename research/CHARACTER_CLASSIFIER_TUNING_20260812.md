@@ -1,77 +1,101 @@
-# Character classifier tuning and training-length follow-up - 2026-08-12
+# Character classifier tuning and epoch selection - 2026-08-13
 
-Status: the fixed-split external classifier candidate is now the controlled
-three-epoch run. It remains a research-only box-local classifier:
-`product_adopted` is false and no formula-exact metric is claimed.
+Status: the current external-only base is the selected five-epoch run. It is a
+research-only, box-local classifier: `product_adopted` is false and no
+formula-exact score is claimed.
 
-## Scope and fixed protocol
+## Fixed scope
 
-- Architecture and input are unchanged: 128 x 5 online-ink tensor, four
-  Transformer blocks, hidden size 128, 372-class math head, and 95-class
-  auxiliary head.
-- All comparisons use seed `20260812`, AdamW, batch size 64, gradient clip 1,
-  weight decay `1e-2`, sampler-only balancing, learning rate `3e-4`, and the
-  fixed 18,723-row external holdout. Project data is not external-model input.
-- Formula-exact CROHME2019 and canonical replay remain unscored because stroke
-  grouping, relations, and a formula decoder are outside this classifier.
-- Raw archives and canonical derivatives were not changed. Trial outputs stay
-  under ignored `artifacts/` paths.
+- Architecture is unchanged: 128 x 5 online-ink tensor, four Transformer
+  blocks, hidden size 128, 372-class math head, and 95-class auxiliary head.
+- Optimizer settings are fixed: seed `20260812`, AdamW, batch size 64,
+  sampler-only balancing, learning rate `3e-4`, weight decay `1e-2`, and
+  gradient clipping 1.
+- External corpora train only the box-local representation. Project data is
+  not external-model input; formula grouping, relations, decoding, CROHME, and
+  canonical formula replay remain outside scope.
+- Raw archives and canonical derivatives are unchanged. All trial artifacts
+  remain local under ignored `artifacts/` paths.
 
-## Fixed two-epoch tuning (historical)
+## Historical two-epoch learning-rate decision
 
-| Candidate | External Top-1 / Top-5 | Direct ownership Top-1 / Top-5 | Decision |
-|---|---:|---:|---|
-| `3e-4`, sampler + loss weights (control) | 42.58% / 82.49% | 25.12% / 43.60% | historical control |
-| `1e-4`, sampler + loss weights | 21.98% / 57.18% | 27.01% / 45.50% | too slow in two epochs |
-| `1e-3`, sampler + loss weights | 0.09% / 0.51% | 3.79% / 3.79% | reject: optimization collapse |
-| `3e-4`, sampler only | 57.93% / 89.50% | 33.18% / 52.61% | removes double balancing |
-| `5e-4`, sampler only | 57.83% / 89.41% | 37.91% / 57.35% | not selected |
-| `3e-4`, sampler only + UJI parentheses to math head | 59.70% / 90.17% | 36.49% / 54.50% | former two-epoch base |
-| former base + synthetic `=` from HWRT `-` | 47.94% / 82.66% | 30.81% / 48.34% | reject and remove |
+| Candidate | External Top-1 / Top-5 | Decision |
+|---|---:|---|
+| `3e-4`, sampler + loss weights | 42.58% / 82.49% | reject: double frequency correction |
+| `1e-4`, sampler + loss weights | 21.98% / 57.18% | reject: too slow in two epochs |
+| `1e-3`, sampler + loss weights | 0.09% / 0.51% | reject: optimization collapse |
+| `3e-4`, sampler only + UJI parentheses to math head | 59.70% / 90.17% | former two-epoch base |
+| former base + synthetic `=` from HWRT `-` | 47.94% / 82.66% | reject and remove |
 
-The paired two-epoch `3e-4` versus `5e-4` sampler-only comparison was not
-decisive (external McNemar two-sided p = `0.776855`; direct p = `0.132498`).
-The synthetic `=` path remains absent: real, consented project ink is used
-only by the separate writer-disjoint symbol-head calibration.
+The synthetic `=` path remains absent. Real project symbols are admitted only
+through the separate writer-disjoint output-head calibration.
 
-## Training-length follow-up (current selection)
+## Leakage-controlled epoch selection
 
-The former two-epoch run ended with math loss `0.9871` and auxiliary loss
-`1.0211`; this did not establish convergence. One controlled extension changed
-only epoch count from two to three. The third epoch reduced those losses to
-`0.7348` and `0.7030`.
+The earlier 3-epoch run still had falling losses, so epoch count was selected
+without reusing the fixed external holdout. A deterministic 10% source-label
+slice was removed from the existing external training cache:
 
-| External-only checkpoint | External Top-1 / Top-5 | Raw project ownership Top-1 / Top-5 |
+- math: 136,074 training and 14,931 selection rows;
+  selection-index SHA-256 `d589699119714f002c91b9b8f5866d1c531407265f617e4d1ef7cf3c85ee7883`;
+- auxiliary: 17,664 training and 1,832 selection rows;
+  selection-index SHA-256 `5d8bb9e0a250f975dbc8ea5656170cc274216b54e33975947a38c9a0498617c3`;
+- seed `20260813`, retaining at least one row from every source+label group
+  in the fitting split.
+
+The fixed 18,723-row external holdout and project ownership data were both
+`not_scored` during this selection. The metric is all-glyph Top-1, then Top-5,
+with the earliest epoch winning an exact tie.
+
+| Epoch | Internal selection Top-1 / Top-5 |
+|---:|---:|
+| 1 | 29.64% / 64.08% |
+| 2 | 60.08% / 91.77% |
+| 3 | 68.29% / 95.10% |
+| 4 | 72.77% / 96.15% |
+| **5** | **74.75% / 96.87%** |
+
+Five epochs is therefore selected before the final full-data retrain. The
+selection run is a decision artifact only; its checkpoint is not a final
+evaluation model.
+
+## One-time final evaluation after selection
+
+The selected five epochs were retrained once using all external training rows,
+then evaluated on the untouched fixed holdout.
+
+| External-only checkpoint | Fixed external Top-1 / Top-5 | Raw project ownership Top-1 / Top-5 |
 |---|---:|---:|
-| Two epochs (former base) | 59.70% / 90.17% | 36.49% / 54.50% |
-| **Three epochs (current base)** | **66.43% / 94.25%** | **38.39% / 58.29%** |
+| Three epochs (former base) | 66.43% / 94.25% | 38.39% / 58.29% |
+| **Five epochs (current base)** | **74.10% / 96.57%** | 35.07% / 55.45% |
 
-The 3-epoch result has zero missing predictions across the fixed external
-holdout. Its per-source external Top-1 / Top-5 is HWRT 65.04% / 93.82%, UJI
-75.41% / 96.72%, ISGL 73.88% / 98.03%, and UCI 92.81% / 100.00%.
+The external Top-1 gain is 7.67 points and Top-5 gain is 2.32 points. Raw
+project ownership decreases before calibration, so it is not used as an
+external-training selection metric; the independent writer-LOO calibration
+result is documented separately. The current base has zero missing external
+predictions, with HWRT 73.41% / 96.31%, UJI 78.43% / 98.02%, ISGL 74.86% /
+98.74%, and UCI 94.96% / 100.00%.
 
-The current base checkpoint is local-only at
-`artifacts/training_length_20260812/external_3ep_sampler_bg/classifier_checkpoint.pt`.
-It is paired with the separately validated project-symbol output-head
-calibration documented in `PROJECT_SYMBOL_HEAD_CALIBRATION_20260812.md`.
+The local-only base checkpoint is
+`artifacts/training_length_20260812/external_5ep_selected_full/classifier_checkpoint.pt`.
+Its five math/auxiliary training losses are 2.9012/2.3419, 0.9871/1.0211,
+0.7348/0.7030, 0.6313/0.5729, and 0.5623/0.5128.
 
 ## Remaining boundary
 
-- The external base does not learn `=` from fabricated data. Real project
-  symbols are admitted only through writer-disjoint output-head calibration.
-- The direct collection has only three writer groups. `a` and `f` have one
-  writer group each (four rows total), so they need new-writer collection
-  before any robust generalization claim.
-- The current result is not a commercial or formula-recognition claim. New
-  writer holdout, stroke grouping, spatial relations, and decoding remain
-  separate gates.
+- `a` and `f` have one project writer group only (four rows total); collect
+  new-writer examples before making a robust direct-generalization claim.
+- The final external-only base is not a commercial or formula-recognition
+  claim. New writer holdout, stroke grouping, spatial relations, and decoding
+  remain independent gates.
 
 ## Verification
 
-- `train_character_classifier_v1.py --self-test` passes with both the legacy
-  two-epoch checkpoint contract and the generic external-training contract.
-- The 3-epoch report is `completed`, records the fixed split, and uses schema
-  `aiflow-character-classifier-external-training/v1`.
-- Tensor, calibration, and replay evaluator self-tests are run after the
-  selection. Dataset normalization and archive verification are rechecked
-  without mutating raw data.
+- The selection runner records
+  `aiflow-character-classifier-selection/v1`; it never scores the fixed
+  external holdout or project ownership set.
+- The full-data result records
+  `aiflow-character-classifier-external-training/v1` and has `status` of
+  `completed`.
+- Classifier, calibration, tensor, and replay self-tests are re-run after the
+  code change. Normalization and archive verification are verify-only.
