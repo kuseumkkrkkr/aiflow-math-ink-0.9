@@ -25,6 +25,7 @@ from character_tensor_v1 import _json_lines, tensorize
 from replay_evaluate_hwr_v1 import score_glyphs_from_rows
 from train_character_classifier_v1 import (
     DEFAULT_CANONICAL_ROOT,
+    EXTERNAL_TRAINING_SCHEMA,
     InkClassifierV1,
     PILOT_SCHEMA,
     _dataset,
@@ -71,8 +72,8 @@ def _copy_head(head: nn.Linear) -> nn.Linear:
 
 def _load_base(checkpoint_path: Path, math_labels: list[str], auxiliary_labels: list[str], device: torch.device) -> InkClassifierV1:
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    if checkpoint.get("schema") != PILOT_SCHEMA:
-        raise ValueError(f"base checkpoint must be the external-only pilot schema: {PILOT_SCHEMA}")
+    if checkpoint.get("schema") not in {PILOT_SCHEMA, EXTERNAL_TRAINING_SCHEMA}:
+        raise ValueError("base checkpoint must be an external-only training schema")
     if checkpoint.get("math_labels") != math_labels or checkpoint.get("auxiliary_labels") != auxiliary_labels:
         raise ValueError("base checkpoint vocabulary does not match the current canonical corpus")
     report = checkpoint.get("report", {})
@@ -164,6 +165,8 @@ def _calibrate_rows(
     rehearsal_labels: torch.Tensor,
     direct_batch_size: int,
     rehearsal_loss_weight: float,
+    calibration_steps: int,
+    calibration_learning_rate: float,
     fold_seed: int,
 ) -> tuple[nn.Linear, dict]:
     direct_mask = torch.isin(direct_labels[train_indices], target_indices)
@@ -176,13 +179,13 @@ def _calibrate_rows(
     sample_weights = torch.tensor([1.0 / counts[int(label)] for label in train_labels], dtype=torch.double)
     sampler = WeightedRandomSampler(
         sample_weights,
-        num_samples=CALIBRATION_STEPS * direct_batch_size,
+        num_samples=calibration_steps * direct_batch_size,
         replacement=True,
         generator=torch.Generator().manual_seed(fold_seed),
     )
     loader = DataLoader(TensorDataset(direct_embeddings[project_train], train_labels), batch_size=direct_batch_size, sampler=sampler)
     calibrated = copy.deepcopy(base_head).train()
-    optimizer = torch.optim.AdamW(calibrated.parameters(), lr=CALIBRATION_LEARNING_RATE, weight_decay=0.0)
+    optimizer = torch.optim.AdamW(calibrated.parameters(), lr=calibration_learning_rate, weight_decay=0.0)
     immutable = torch.ones(base_head.out_features, dtype=torch.bool)
     immutable[target_indices] = False
     replay_generator = torch.Generator().manual_seed(fold_seed + 100)
@@ -201,7 +204,7 @@ def _calibrate_rows(
         losses.append(float(loss.detach()))
     calibrated.eval()
     _assert_only_rows_changed(base_head, calibrated, target_indices)
-    return calibrated, {"project_train_records": len(project_train), "target_output_rows": target_indices.tolist(), "direct_batch_size": direct_batch_size, "rehearsal_loss_weight": rehearsal_loss_weight, "steps": len(losses), "mean_loss": sum(losses) / len(losses)}
+    return calibrated, {"project_train_records": len(project_train), "target_output_rows": target_indices.tolist(), "direct_batch_size": direct_batch_size, "rehearsal_loss_weight": rehearsal_loss_weight, "learning_rate": calibration_learning_rate, "steps": len(losses), "mean_loss": sum(losses) / len(losses)}
 
 
 def _calibrate_two_stage(
@@ -212,19 +215,21 @@ def _calibrate_two_stage(
     punctuation_indices: torch.Tensor,
     rehearsal_embeddings: torch.Tensor,
     rehearsal_labels: torch.Tensor,
+    calibration_steps: int,
+    calibration_learning_rate: float,
     fold_seed: int,
 ) -> tuple[nn.Linear, dict]:
     punctuation_head, punctuation = _calibrate_rows(
         base_head, direct_embeddings, direct_labels, train_indices, punctuation_indices,
         rehearsal_embeddings, rehearsal_labels, PUNCTUATION_DIRECT_BATCH_SIZE,
-        PUNCTUATION_REHEARSAL_LOSS_WEIGHT, fold_seed,
+        PUNCTUATION_REHEARSAL_LOSS_WEIGHT, calibration_steps, calibration_learning_rate, fold_seed,
     )
     train_labels = direct_labels[train_indices]
     other_indices = torch.unique(train_labels[~torch.isin(train_labels, punctuation_indices)])
     calibrated, other = _calibrate_rows(
         punctuation_head, direct_embeddings, direct_labels, train_indices, other_indices,
         rehearsal_embeddings, rehearsal_labels, PROJECT_SYMBOL_DIRECT_BATCH_SIZE,
-        PROJECT_SYMBOL_REHEARSAL_LOSS_WEIGHT, fold_seed + 1000,
+        PROJECT_SYMBOL_REHEARSAL_LOSS_WEIGHT, calibration_steps, calibration_learning_rate, fold_seed + 1000,
     )
     _assert_only_rows_changed(base_head, calibrated, torch.unique(torch.cat((punctuation_indices, other_indices))))
     return calibrated, {"punctuation": punctuation, "other_observed_symbols": other}
@@ -310,6 +315,8 @@ def main() -> int:
     parser.add_argument("--base-checkpoint", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument("--calibration-steps", type=int, default=CALIBRATION_STEPS)
+    parser.add_argument("--calibration-learning-rate", type=float, default=CALIBRATION_LEARNING_RATE)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--leave-one-writer-out", action="store_true")
     mode.add_argument("--finalize-all-writers", action="store_true")
@@ -321,6 +328,8 @@ def main() -> int:
         parser.error("use --leave-one-writer-out or --finalize-all-writers")
     if args.cache_dir is None or args.base_checkpoint is None or args.output is None:
         parser.error("--cache-dir, --base-checkpoint, and --output are required")
+    if args.calibration_steps < 1 or args.calibration_learning_rate <= 0:
+        parser.error("--calibration-steps and --calibration-learning-rate must be positive")
     canonical_root = _d_path(args.canonical_root, "canonical root")
     cache_dir = _d_path(args.cache_dir, "cache")
     checkpoint_path = _d_path(args.base_checkpoint, "base checkpoint")
@@ -367,8 +376,8 @@ def main() -> int:
         "calibration": {
             "punctuation_labels": list(PUNCTUATION),
             "output_rows_only": True,
-            "steps": CALIBRATION_STEPS,
-            "learning_rate": CALIBRATION_LEARNING_RATE,
+            "steps": args.calibration_steps,
+            "learning_rate": args.calibration_learning_rate,
             "punctuation_direct_batch_size": PUNCTUATION_DIRECT_BATCH_SIZE,
             "other_symbol_direct_batch_size": PROJECT_SYMBOL_DIRECT_BATCH_SIZE,
             "rehearsal_batch_size": REHEARSAL_BATCH_SIZE,
@@ -382,7 +391,7 @@ def main() -> int:
     if args.leave_one_writer_out:
         folds: list[dict] = []
         for fold, (writer_group, train_indices, held_indices) in enumerate(_writer_split_indices(writers)):
-            calibrated, train_meta = _calibrate_two_stage(base_math_head, direct_embeddings, direct_labels, train_indices, punctuation_indices, rehearsal_embeddings, rehearsal_labels, SEED + fold)
+            calibrated, train_meta = _calibrate_two_stage(base_math_head, direct_embeddings, direct_labels, train_indices, punctuation_indices, rehearsal_embeddings, rehearsal_labels, args.calibration_steps, args.calibration_learning_rate, SEED + fold)
             base_direct, _ = _score(base_math_head, direct_embeddings[held_indices], math_labels, [direct_truth[index] for index in held_indices.tolist()])
             calibrated_direct, _ = _score(calibrated, direct_embeddings[held_indices], math_labels, [direct_truth[index] for index in held_indices.tolist()])
             calibrated_external = _external_score(calibrated, math_eval_embeddings, math_labels, math_truth, auxiliary_predictions, auxiliary_truth)
@@ -416,7 +425,7 @@ def main() -> int:
         }
     else:
         all_indices = torch.arange(len(direct_labels), dtype=torch.long)
-        calibrated, train_meta = _calibrate_two_stage(base_math_head, direct_embeddings, direct_labels, all_indices, punctuation_indices, rehearsal_embeddings, rehearsal_labels, SEED)
+        calibrated, train_meta = _calibrate_two_stage(base_math_head, direct_embeddings, direct_labels, all_indices, punctuation_indices, rehearsal_embeddings, rehearsal_labels, args.calibration_steps, args.calibration_learning_rate, SEED)
         calibrated_external = _external_score(calibrated, math_eval_embeddings, math_labels, math_truth, auxiliary_predictions, auxiliary_truth)
         model.math_head.load_state_dict(calibrated.state_dict())
         report = {

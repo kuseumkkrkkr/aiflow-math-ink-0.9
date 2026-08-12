@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the fixed, exactly two-epoch Math Ink 1.0 classifier feasibility pilot.
+"""Run a controlled external-only Math Ink 1.0 classifier training trial.
 
 This is intentionally not a production adoption command.  It trains only on
 approved external character records outside the fixed 10% holdout, retains the
@@ -34,15 +34,24 @@ DEFAULT_CANONICAL_ROOT = ROOT / "datasets" / "normalized" / "v1"
 DEFAULT_OUTPUT = ROOT / "artifacts" / "character_classifier_v1_pilot_2ep"
 CACHE_SCHEMA = "aiflow-character-classifier-cache/v2"
 PILOT_SCHEMA = "aiflow-character-classifier-two-epoch-pilot/v2"
+EXTERNAL_TRAINING_SCHEMA = "aiflow-character-classifier-external-training/v1"
 SOURCE_HEAD = {"hwrt": "math", "uji": "auxiliary", "isgl": "auxiliary", "uci": "auxiliary"}
 EXTRA_MATH_LABELS = ("(", ")", "=")
 # UJI provides commercial isolated examples for these exact math tokens.  They
 # train the deployed math head, not the auxiliary pretraining head, so each
 # source record has one target head and one evaluation prediction.
 MATH_TRANSFERRED_AUXILIARY_LABELS = frozenset({"(", ")"})
-EPOCHS = 2
+DEFAULT_EPOCHS = 2
 WEIGHT_DECAY = 1e-2
 BALANCE_MODES = ("sampler-and-loss", "sampler", "loss", "none")
+
+
+def _checkpoint_contract(epochs: int) -> tuple[str, str]:
+    if epochs < 1:
+        raise ValueError("epochs must be positive")
+    # Keep the committed two-epoch feasibility artifact reproducible while
+    # giving longer controlled trials an explicit, non-misleading schema.
+    return (PILOT_SCHEMA, "two_epoch_checkpoint.pt") if epochs == 2 else (EXTERNAL_TRAINING_SCHEMA, "classifier_checkpoint.pt")
 
 
 def _sha256(path: Path) -> str:
@@ -370,13 +379,15 @@ def _self_test() -> None:
     assert _balance_flags("none") == (False, False)
     assert _head_for_row("uji", "(") == "math"
     assert _head_for_row("uji", "A") == "auxiliary"
+    assert _checkpoint_contract(2) == (PILOT_SCHEMA, "two_epoch_checkpoint.pt")
+    assert _checkpoint_contract(3) == (EXTERNAL_TRAINING_SCHEMA, "classifier_checkpoint.pt")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--canonical-root", type=Path, default=DEFAULT_CANONICAL_ROOT)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
-    parser.add_argument("--epochs", type=int, default=EPOCHS)
+    parser.add_argument("--epochs", type=int, default=DEFAULT_EPOCHS)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--eval-batch-size", type=int, default=256)
     parser.add_argument("--learning-rate", type=float, default=3e-4)
@@ -389,18 +400,18 @@ def main() -> int:
     args = parser.parse_args()
     if args.self_test:
         _self_test(); print(json.dumps({"self_test": "pass"})); return 0
-    if args.epochs != EPOCHS:
-        parser.error(f"this feasibility runner is locked to exactly {EPOCHS} epochs")
-    if args.batch_size < 1 or args.eval_batch_size < 1 or args.log_every < 1:
-        parser.error("batch sizes and log interval must be positive")
+    if args.epochs < 1 or args.batch_size < 1 or args.eval_batch_size < 1 or args.log_every < 1:
+        parser.error("epochs, batch sizes, and log interval must be positive")
     output = args.output.resolve()
     if output.drive.upper() != "D:":
         parser.error(f"output must remain on D:: {output}")
     cache_dir = args.cache_dir.resolve() if args.cache_dir else output / "cache"
     if cache_dir.drive.upper() != "D:":
         parser.error(f"cache must remain on D:: {cache_dir}")
-    if (output / "two_epoch_checkpoint.pt").exists():
-        parser.error(f"pilot checkpoint already exists: {output}; choose a fresh --output path")
+    run_schema, checkpoint_name = _checkpoint_contract(args.epochs)
+    checkpoint_path = output / checkpoint_name
+    if any((output / name).exists() for name in ("two_epoch_checkpoint.pt", "classifier_checkpoint.pt")):
+        parser.error(f"classifier checkpoint already exists: {output}; choose a fresh --output path")
     if args.device == "cuda" and not torch.cuda.is_available():
         parser.error("CUDA was requested but is unavailable")
     device = torch.device(args.device if args.device == "cpu" or torch.cuda.is_available() else "cpu")
@@ -423,10 +434,10 @@ def main() -> int:
     scaler = torch.amp.GradScaler(device.type, enabled=device.type == "cuda")
     math_weights = math_weights.to(device)
     aux_weights = aux_weights.to(device)
-    print(json.dumps({"event": "pilot_start", "device": str(device), "epochs": EPOCHS, "learning_rate": args.learning_rate, "balance_mode": args.balance_mode, "math_train": len(math_train), "auxiliary_train": len(aux_train), "external_holdout": len(math_eval) + len(aux_eval), "direct_ownership": len(direct_eval)}, ensure_ascii=False), flush=True)
+    print(json.dumps({"event": "training_start", "device": str(device), "epochs": args.epochs, "learning_rate": args.learning_rate, "balance_mode": args.balance_mode, "math_train": len(math_train), "auxiliary_train": len(aux_train), "external_holdout": len(math_eval) + len(aux_eval), "direct_ownership": len(direct_eval)}, ensure_ascii=False), flush=True)
     history = []
     started = time.perf_counter()
-    for epoch in range(1, EPOCHS + 1):
+    for epoch in range(1, args.epochs + 1):
         history.append({"epoch": epoch, "math": train_head(model, optimizer, scaler, math_loader, math_weights, "math", device, epoch, args.log_every), "auxiliary": train_head(model, optimizer, scaler, aux_loader, aux_weights, "auxiliary", device, epoch, args.log_every)})
     external_predictions = {}
     external_predictions.update(predict(model, math_eval, math_truth, math_labels, "math", device, args.eval_batch_size))
@@ -438,10 +449,10 @@ def main() -> int:
     _write_predictions(output / "direct_ownership_predictions.jsonl", direct_predictions)
     observed_math = {math_labels[index] for index in np.unique(np.asarray(math_train.labels, dtype=np.int64))}
     report = {
-        "schema": PILOT_SCHEMA,
+        "schema": run_schema,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "status": "completed",
-        "trained_epochs": EPOCHS,
+        "trained_epochs": args.epochs,
         "device": str(device),
         "seed": args.seed,
         "optimization": {"optimizer": "AdamW", "learning_rate": args.learning_rate, "weight_decay": WEIGHT_DECAY, "balance_mode": args.balance_mode, "gradient_clip_norm": 1.0, "scheduler": "none", "warmup_steps": 0},
@@ -458,9 +469,9 @@ def main() -> int:
         "elapsed_seconds": time.perf_counter() - started,
         "product_adopted": False,
     }
-    torch.save({"schema": PILOT_SCHEMA, "state_dict": model.state_dict(), "math_labels": math_labels, "auxiliary_labels": aux_labels, "report": report}, output / "two_epoch_checkpoint.pt")
+    torch.save({"schema": run_schema, "state_dict": model.state_dict(), "math_labels": math_labels, "auxiliary_labels": aux_labels, "report": report}, checkpoint_path)
     (output / "training_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
-    print(json.dumps({"event": "pilot_complete", "external_top1": external_score["top1"], "external_top5": external_score["top5"], "direct_top1": direct_score["top1"], "direct_top5": direct_score["top5"], "seconds": report["elapsed_seconds"]}, ensure_ascii=False), flush=True)
+    print(json.dumps({"event": "training_complete", "external_top1": external_score["top1"], "external_top5": external_score["top5"], "direct_top1": direct_score["top1"], "direct_top5": direct_score["top5"], "seconds": report["elapsed_seconds"]}, ensure_ascii=False), flush=True)
     return 0
 
 
