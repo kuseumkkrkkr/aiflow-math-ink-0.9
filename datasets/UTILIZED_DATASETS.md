@@ -20,9 +20,10 @@ only and is not a tensor, training, or evaluation input.
 | Dataset | Current use | Evidence boundary |
 |---|---|---|
 | AIFlow project-owned public ink | Current 0.9 calibrator training and replay evaluation | 110 valid formulas are eligible; the ownership training subset is 47 formulas / 211 symbols. Pending 4 and rejected 5 are excluded. |
+| AIFlow project-owned ownership subset | 1.0 box-local symbol-head calibration after leave-one-writer-out validation | Three hashed writer groups; real rows calibrate only 25 observed math output labels. Final all-writer checkpoint does not score these training rows; no formula grouping, relation, or decoder supervision is admitted. |
 | CROHME2019 valid | Noncommercial regression evaluation only | 985 parseable formulas; never product training or product-performance evidence. |
 
-The current 0.9 checkpoint has not yet been retrained on the newly approved external pool below.
+The current 0.9 checkpoint has not yet been retrained on the newly approved external pool below. The separate 1.0 research candidate first trains the external box-local base, then applies the writer-disjoint project-symbol calibration recorded in `research/PROJECT_SYMBOL_HEAD_CALIBRATION_20260812.md`.
 
 ## Canonical normalization derivative
 

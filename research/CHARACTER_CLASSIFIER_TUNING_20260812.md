@@ -3,6 +3,11 @@
 Status: fixed-split two-epoch tuning is complete. The selected checkpoint is a
 research pilot only; it is not product adopted and it does not score formulas.
 
+The selected checkpoint is the external-only base for the later real
+project-symbol calibration in `PROJECT_SYMBOL_HEAD_CALIBRATION_20260812.md`.
+The `=` limitation below applies to this base checkpoint and cache, not to the
+separate writer-disjoint project calibration.
+
 ## Controlled protocol
 
 - Every candidate used the same seed (`20260812`), two epochs, 128 x 5 tensor,

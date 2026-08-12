@@ -1,8 +1,9 @@
 # Character classifier training readiness
 
-Status: the historical two-epoch feasibility pilot and a fixed-split tuning
-loop are complete; neither checkpoint is product adopted. The current research
-default and its evidence are in `CHARACTER_CLASSIFIER_TUNING_20260812.md`.
+Status: the external-only two-epoch pilot, fixed-split tuning loop, and a
+writer-disjoint project symbol-head calibration are complete; none is product
+adopted. The current research candidate is documented in
+`PROJECT_SYMBOL_HEAD_CALIBRATION_20260812.md`.
 
 ## Admission decisions
 
@@ -27,12 +28,16 @@ default and its evidence are in `CHARACTER_CLASSIFIER_TUNING_20260812.md`.
 - UJI `(` and `)` now route to the 372-class math head, not the auxiliary
   head. This preserves one target head per source row and reduces the
   auxiliary vocabulary from 97 to 95 labels.
-- `=` remains an output but has no real admitted training row. Synthetic
-  equals generated from dashes were tested and rejected; they are not present
-  in the current pipeline.
+- `=` has no real admitted **external** training row. Synthetic equals
+  generated from dashes were tested and rejected; they are not present in the
+  pipeline. The separate project calibration uses only real writer-disjoint
+  project `=` trajectories.
 - The fixed raw and normalized datasets remain unchanged. The selected cache
   is a local, D:-resident v2 derivative and is reproducible only when its
   manifest matches the pinned canonical manifest and holdout IDs.
+- `calibrate_project_punctuation_v1.py` first calibrates `(`, `)`, and `=`,
+  then the remaining observed project output rows. It uses external training
+  rehearsal and explicitly proves that no other model row changes.
 
 ## Tensor contract
 
@@ -60,11 +65,11 @@ every admitted source therefore retains at least one resampled point per stroke.
 | Protocol | Scope | Metric | Evidence limit |
 |---|---|---|---|
 | CROHME2019 | Noncommercial InkML only | Formula exact | Never product training or product evidence |
-| Project ownership | All 47 formulas / 211 symbol groups | Symbol Top-1 and Top-5 | Project-owned evaluation only |
+| Project ownership | 47 formulas / 211 symbol groups across three hashed writers | External-only frozen score, then leave-one-writer-out symbol calibration score | Final all-writer calibration must not score its own project rows |
 | Project canonical replay | Deterministic 10 of 110 formulas | Formula exact | Requires an end-to-end grouping/decision predictor |
 | Current approved external data | Deterministic 10% per source and symbol, minimum one row | Symbol Top-1 and Top-5, reported by source | Technical holdout, not product evidence |
 
 `scripts/replay_evaluate_hwr_v1.py` writes point-by-point replay pages and
-scores supplied prediction JSONL. The two-epoch checkpoint can score only
-box-local character protocols; formula-exact CROHME and canonical replay still
-require the absent grouping and decision pipeline.
+scores supplied prediction JSONL. The external-only checkpoint and calibrated
+candidate can score only box-local character protocols; formula-exact CROHME
+and canonical replay still require the absent grouping and decision pipeline.
