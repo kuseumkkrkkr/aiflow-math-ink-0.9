@@ -45,6 +45,53 @@ MATH_TRANSFERRED_AUXILIARY_LABELS = frozenset({"(", ")"})
 DEFAULT_EPOCHS = 2
 WEIGHT_DECAY = 1e-2
 BALANCE_MODES = ("sampler-and-loss", "sampler", "loss", "none")
+# ``math-observed-one`` is a head policy, while the three data modes are the
+# concrete per-tensor transforms used by Dataset instances.
+INPUT_MODES = ("preserve", "zero-observed", "math-observed-one")
+DATASET_INPUT_MODES = ("preserve", "zero-observed", "force-observed-one")
+OBSERVED_CHANNEL_INDEX = CHANNELS.index("observed")
+
+
+def apply_input_mode(features: np.ndarray, input_mode: str) -> np.ndarray:
+    """Return an isolated input tensor under the declared source-time policy."""
+    if input_mode not in DATASET_INPUT_MODES:
+        raise ValueError(f"unknown input mode: {input_mode}")
+    adjusted = np.array(features, dtype=np.float32, copy=True)
+    if adjusted.shape[-1] != len(CHANNELS):
+        raise ValueError(f"expected trailing {len(CHANNELS)} channels, got {adjusted.shape}")
+    if input_mode == "zero-observed":
+        adjusted[..., OBSERVED_CHANNEL_INDEX] = 0.0
+    if input_mode == "force-observed-one":
+        adjusted[..., OBSERVED_CHANNEL_INDEX] = 1.0
+    return adjusted
+
+
+def input_mode_for_head(input_mode: str, head: str) -> str:
+    """Map a model-level input policy to a concrete tensor transform."""
+    if input_mode not in INPUT_MODES:
+        raise ValueError(f"unknown input mode: {input_mode}")
+    if head not in {"math", "auxiliary"}:
+        raise ValueError(f"unknown head: {head}")
+    if input_mode == "math-observed-one":
+        return "force-observed-one" if head == "math" else "preserve"
+    return input_mode
+
+
+def input_contract(input_mode: str) -> dict:
+    math_mode = input_mode_for_head(input_mode, "math")
+    auxiliary_mode = input_mode_for_head(input_mode, "auxiliary")
+    policies = {
+        "preserve": "preserve_tensorized_source_availability",
+        "zero-observed": "constant_zero_for_source_invariance",
+        "math-observed-one": "math_head_constant_one_to_remove_uji_parenthesis_source_cue;_auxiliary_preserves_tensorized_source_availability",
+    }
+    return {
+        "channels": list(CHANNELS),
+        "observed_channel_mode": input_mode,
+        "math_observed_transform": math_mode,
+        "auxiliary_observed_transform": auxiliary_mode,
+        "observed_channel_policy": policies[input_mode],
+    }
 
 
 def _checkpoint_contract(epochs: int, selection_enabled: bool = False) -> tuple[str, str]:
@@ -126,9 +173,12 @@ class InkClassifierV1(nn.Module):
 
 
 class NpyDataset(Dataset[tuple[torch.Tensor, int]]):
-    def __init__(self, feature_path: Path, label_path: Path) -> None:
+    def __init__(self, feature_path: Path, label_path: Path, input_mode: str = "preserve") -> None:
         self.features = np.load(feature_path, mmap_mode="r")
         self.labels = np.load(label_path, mmap_mode="r")
+        if input_mode not in DATASET_INPUT_MODES:
+            raise ValueError(f"unknown input mode: {input_mode}")
+        self.input_mode = input_mode
         if len(self.features) != len(self.labels) or self.features.shape[1:] != (POINTS, len(CHANNELS)):
             raise ValueError(f"invalid cache arrays: {feature_path}")
 
@@ -136,18 +186,21 @@ class NpyDataset(Dataset[tuple[torch.Tensor, int]]):
         return len(self.labels)
 
     def __getitem__(self, index: int) -> tuple[torch.Tensor, int]:
-        return torch.from_numpy(np.array(self.features[index], dtype=np.float32, copy=True)), int(self.labels[index])
+        return torch.from_numpy(apply_input_mode(self.features[index], self.input_mode)), int(self.labels[index])
 
 
 class ArrayDataset(Dataset[tuple[torch.Tensor, int]]):
-    def __init__(self, features: np.ndarray, labels: np.ndarray) -> None:
+    def __init__(self, features: np.ndarray, labels: np.ndarray, input_mode: str = "preserve") -> None:
         self.features, self.labels = features, labels
+        if input_mode not in DATASET_INPUT_MODES:
+            raise ValueError(f"unknown input mode: {input_mode}")
+        self.input_mode = input_mode
 
     def __len__(self) -> int:
         return len(self.labels)
 
     def __getitem__(self, index: int) -> tuple[torch.Tensor, int]:
-        return torch.from_numpy(self.features[index].copy()), int(self.labels[index])
+        return torch.from_numpy(apply_input_mode(self.features[index], self.input_mode)), int(self.labels[index])
 
 
 class IndexedDataset(Dataset[tuple[torch.Tensor, int]]):
@@ -280,8 +333,8 @@ def prepare_cache(canonical_root: Path, cache_dir: Path, math_labels: list[str],
     return manifest
 
 
-def _dataset(cache_dir: Path, item: dict) -> NpyDataset:
-    return NpyDataset(cache_dir / item["features"], cache_dir / item["labels"])
+def _dataset(cache_dir: Path, item: dict, input_mode: str = "preserve") -> NpyDataset:
+    return NpyDataset(cache_dir / item["features"], cache_dir / item["labels"], input_mode)
 
 
 def _selection_indices_from_groups(groups: dict[str, list[tuple[int, str]]], expected_records: int, ratio: float, seed: int) -> tuple[np.ndarray, np.ndarray]:
@@ -438,7 +491,7 @@ def _selection_score(
     }
 
 
-def direct_ownership_dataset(canonical_root: Path, math_index: dict[str, int]) -> tuple[ArrayDataset, list[dict]]:
+def direct_ownership_dataset(canonical_root: Path, math_index: dict[str, int], input_mode: str = "preserve") -> tuple[ArrayDataset, list[dict]]:
     path = canonical_root / "character_classifier_v1" / "project_owned_ownership_eval.jsonl.gz"
     if not path.is_file():
         raise FileNotFoundError(f"missing ownership evaluation derivative: {path}")
@@ -452,7 +505,7 @@ def direct_ownership_dataset(canonical_root: Path, math_index: dict[str, int]) -
         features.append(tensorize(row))
         labels.append(math_index[label])
         truths.append({"record_id": str(row["record_id"]), "label": label})
-    return ArrayDataset(np.stack(features).astype(np.float32), np.asarray(labels, dtype=np.int64)), truths
+    return ArrayDataset(np.stack(features).astype(np.float32), np.asarray(labels, dtype=np.int64), input_mode), truths
 
 
 def _write_predictions(path: Path, predictions: dict[str, dict]) -> None:
@@ -472,6 +525,14 @@ def _self_test() -> None:
     assert _balance_flags("none") == (False, False)
     assert _head_for_row("uji", "(") == "math"
     assert _head_for_row("uji", "A") == "auxiliary"
+    observed = np.ones((POINTS, len(CHANNELS)), dtype=np.float32)
+    masked = apply_input_mode(observed, "zero-observed")
+    assert np.all(masked[:, OBSERVED_CHANNEL_INDEX] == 0.0)
+    assert np.all(observed[:, OBSERVED_CHANNEL_INDEX] == 1.0)
+    assert np.array_equal(apply_input_mode(observed, "preserve"), observed)
+    assert np.all(apply_input_mode(np.zeros_like(observed), "force-observed-one")[:, OBSERVED_CHANNEL_INDEX] == 1.0)
+    assert input_mode_for_head("math-observed-one", "math") == "force-observed-one"
+    assert input_mode_for_head("math-observed-one", "auxiliary") == "preserve"
     assert _checkpoint_contract(2) == (PILOT_SCHEMA, "two_epoch_checkpoint.pt")
     assert _checkpoint_contract(3) == (EXTERNAL_TRAINING_SCHEMA, "classifier_checkpoint.pt")
     assert _checkpoint_contract(5, True) == (SELECTION_TRAINING_SCHEMA, "selection_checkpoint.pt")
@@ -490,6 +551,7 @@ def main() -> int:
     parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument("--balance-mode", choices=BALANCE_MODES, default="sampler")
     parser.add_argument("--cache-dir", type=Path, help="reuse a compatible D: cache across controlled trials")
+    parser.add_argument("--input-mode", choices=INPUT_MODES, default="preserve", help="preserve source-time availability, mask it globally, or force it to one only for the math head")
     parser.add_argument("--seed", type=int, default=20260812)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--log-every", type=int, default=250)
@@ -521,8 +583,10 @@ def main() -> int:
     output.mkdir(parents=True, exist_ok=True)
     math_labels, aux_labels = load_vocabs(args.canonical_root)
     cache = prepare_cache(args.canonical_root, cache_dir, math_labels, aux_labels)
-    math_train_full = _dataset(cache_dir, cache["sets"]["math_train"])
-    aux_train_full = _dataset(cache_dir, cache["sets"]["auxiliary_train"])
+    math_input_mode = input_mode_for_head(args.input_mode, "math")
+    auxiliary_input_mode = input_mode_for_head(args.input_mode, "auxiliary")
+    math_train_full = _dataset(cache_dir, cache["sets"]["math_train"], math_input_mode)
+    aux_train_full = _dataset(cache_dir, cache["sets"]["auxiliary_train"], auxiliary_input_mode)
     selection_report: dict = {"enabled": False}
     if selection_enabled:
         label_indices = {"math": {label: index for index, label in enumerate(math_labels)}, "auxiliary": {label: index for index, label in enumerate(aux_labels)}}
@@ -552,7 +616,7 @@ def main() -> int:
     scaler = torch.amp.GradScaler(device.type, enabled=device.type == "cuda")
     math_weights = math_weights.to(device)
     aux_weights = aux_weights.to(device)
-    print(json.dumps({"event": "training_start", "device": str(device), "epochs": args.epochs, "learning_rate": args.learning_rate, "balance_mode": args.balance_mode, "math_train": len(math_train), "auxiliary_train": len(aux_train), "selection_validation": selection_report["enabled"], "fixed_external_holdout_scored": False}, ensure_ascii=False), flush=True)
+    print(json.dumps({"event": "training_start", "device": str(device), "epochs": args.epochs, "learning_rate": args.learning_rate, "balance_mode": args.balance_mode, "input_mode": args.input_mode, "math_train": len(math_train), "auxiliary_train": len(aux_train), "selection_validation": selection_report["enabled"], "fixed_external_holdout_scored": False}, ensure_ascii=False), flush=True)
     history = []
     best_selection: dict | None = None
     best_selection_state: dict[str, torch.Tensor] | None = None
@@ -579,11 +643,11 @@ def main() -> int:
         direct_score = {"status": "not_scored", "reason": "project ownership is reserved for the full-data retrain after selection"}
     else:
         math_index = {label: index for index, label in enumerate(math_labels)}
-        math_eval = _dataset(cache_dir, cache["sets"]["math_eval"])
-        aux_eval = _dataset(cache_dir, cache["sets"]["auxiliary_eval"])
+        math_eval = _dataset(cache_dir, cache["sets"]["math_eval"], math_input_mode)
+        aux_eval = _dataset(cache_dir, cache["sets"]["auxiliary_eval"], auxiliary_input_mode)
         math_truth = _read_truth(cache_dir / cache["sets"]["math_eval"]["truth"])
         aux_truth = _read_truth(cache_dir / cache["sets"]["auxiliary_eval"]["truth"])
-        direct_eval, direct_truth = direct_ownership_dataset(args.canonical_root, math_index)
+        direct_eval, direct_truth = direct_ownership_dataset(args.canonical_root, math_index, math_input_mode)
         external_predictions = {}
         external_predictions.update(predict(model, math_eval, math_truth, math_labels, "math", device, args.eval_batch_size))
         external_predictions.update(predict(model, aux_eval, aux_truth, aux_labels, "auxiliary", device, args.eval_batch_size))
@@ -601,6 +665,7 @@ def main() -> int:
         "device": str(device),
         "seed": args.seed,
         "optimization": {"optimizer": "AdamW", "learning_rate": args.learning_rate, "weight_decay": WEIGHT_DECAY, "balance_mode": args.balance_mode, "gradient_clip_norm": 1.0, "scheduler": "none", "warmup_steps": 0},
+        "input_contract": input_contract(args.input_mode),
         "architecture": {"input": [POINTS, len(CHANNELS)], "projection": [len(CHANNELS), 128], "transformer_blocks": 4, "hidden": 128, "attention_heads": 4, "math_head": len(math_labels), "auxiliary_head": len(aux_labels)},
         "data_admission": {"train_sources": SOURCE_HEAD, "math_transferred_auxiliary_labels": sorted(MATH_TRANSFERRED_AUXILIARY_LABELS), "project_owned_training": False, "bdshwa_training": False, "crohme_training": False, "holdout_fixed_before_training": True},
         "cache": cache,

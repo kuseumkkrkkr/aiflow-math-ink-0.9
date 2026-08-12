@@ -9,6 +9,7 @@ artifacts/tuning_lr_20260812/
 artifacts/project_punctuation_calibration_v1/
 artifacts/training_length_20260812/
 artifacts/training_length_20260813/
+artifacts/observed_channel_20260813/
 datasets/normalized/
 datasets/30_noncommercial_evaluation/crohme2019/
 __pycache__/

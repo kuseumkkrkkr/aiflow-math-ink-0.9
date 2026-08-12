@@ -26,9 +26,13 @@ from replay_evaluate_hwr_v1 import score_glyphs_from_rows
 from train_character_classifier_v1 import (
     DEFAULT_CANONICAL_ROOT,
     EXTERNAL_TRAINING_SCHEMA,
+    INPUT_MODES,
     InkClassifierV1,
     PILOT_SCHEMA,
     _dataset,
+    apply_input_mode,
+    input_contract,
+    input_mode_for_head,
     load_vocabs,
     prepare_cache,
 )
@@ -70,7 +74,7 @@ def _copy_head(head: nn.Linear) -> nn.Linear:
     return copied
 
 
-def _load_base(checkpoint_path: Path, math_labels: list[str], auxiliary_labels: list[str], device: torch.device) -> InkClassifierV1:
+def _load_base(checkpoint_path: Path, math_labels: list[str], auxiliary_labels: list[str], device: torch.device, input_mode: str) -> InkClassifierV1:
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     if checkpoint.get("schema") not in {PILOT_SCHEMA, EXTERNAL_TRAINING_SCHEMA}:
         raise ValueError("base checkpoint must be an external-only training schema")
@@ -79,6 +83,11 @@ def _load_base(checkpoint_path: Path, math_labels: list[str], auxiliary_labels: 
     report = checkpoint.get("report", {})
     if report.get("data_admission", {}).get("project_owned_training"):
         raise ValueError("base checkpoint already contains project-owned training data")
+    checkpoint_input_mode = report.get("input_contract", {}).get("observed_channel_mode", "preserve")
+    if checkpoint_input_mode not in INPUT_MODES:
+        raise ValueError(f"base checkpoint has an unknown input mode: {checkpoint_input_mode}")
+    if checkpoint_input_mode != input_mode:
+        raise ValueError(f"base checkpoint input mode {checkpoint_input_mode!r} does not match calibration mode {input_mode!r}")
     model = InkClassifierV1(len(math_labels), len(auxiliary_labels)).to(device)
     model.load_state_dict(checkpoint["state_dict"], strict=True)
     model.eval()
@@ -86,10 +95,13 @@ def _load_base(checkpoint_path: Path, math_labels: list[str], auxiliary_labels: 
 
 
 @torch.inference_mode()
-def _encode(model: InkClassifierV1, features: np.ndarray | torch.Tensor, device: torch.device, batch_size: int = 256) -> torch.Tensor:
+def _encode(model: InkClassifierV1, features: np.ndarray | torch.Tensor, device: torch.device, input_mode: str = "preserve", batch_size: int = 256) -> torch.Tensor:
     chunks: list[torch.Tensor] = []
     for start in range(0, len(features), batch_size):
-        batch = torch.as_tensor(np.array(features[start:start + batch_size], dtype=np.float32, copy=True), device=device)
+        raw_batch = features[start:start + batch_size]
+        if isinstance(raw_batch, torch.Tensor):
+            raw_batch = raw_batch.detach().cpu().numpy()
+        batch = torch.as_tensor(apply_input_mode(raw_batch, input_mode), device=device)
         chunks.append(model.encode(batch).cpu())
     return torch.cat(chunks)
 
@@ -317,6 +329,7 @@ def main() -> int:
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--calibration-steps", type=int, default=CALIBRATION_STEPS)
     parser.add_argument("--calibration-learning-rate", type=float, default=CALIBRATION_LEARNING_RATE)
+    parser.add_argument("--input-mode", choices=INPUT_MODES, default="preserve", help="must match the base checkpoint input contract")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--leave-one-writer-out", action="store_true")
     mode.add_argument("--finalize-all-writers", action="store_true")
@@ -344,20 +357,22 @@ def main() -> int:
     math_labels, auxiliary_labels = load_vocabs(canonical_root)
     punctuation_indices = torch.tensor([math_labels.index(label) for label in PUNCTUATION], dtype=torch.long)
     cache = prepare_cache(canonical_root, cache_dir, math_labels, auxiliary_labels)
-    math_train = _dataset(cache_dir, cache["sets"]["math_train"])
-    math_eval = _dataset(cache_dir, cache["sets"]["math_eval"])
-    auxiliary_eval = _dataset(cache_dir, cache["sets"]["auxiliary_eval"])
+    math_input_mode = input_mode_for_head(args.input_mode, "math")
+    auxiliary_input_mode = input_mode_for_head(args.input_mode, "auxiliary")
+    math_train = _dataset(cache_dir, cache["sets"]["math_train"], math_input_mode)
+    math_eval = _dataset(cache_dir, cache["sets"]["math_eval"], math_input_mode)
+    auxiliary_eval = _dataset(cache_dir, cache["sets"]["auxiliary_eval"], auxiliary_input_mode)
     math_truth = list(_json_lines(cache_dir / cache["sets"]["math_eval"]["truth"]))
     auxiliary_truth = list(_json_lines(cache_dir / cache["sets"]["auxiliary_eval"]["truth"]))
-    model = _load_base(checkpoint_path, math_labels, auxiliary_labels, device)
+    model = _load_base(checkpoint_path, math_labels, auxiliary_labels, device, args.input_mode)
     math_index = {label: index for index, label in enumerate(math_labels)}
     direct_features, direct_labels, writers, direct_truth = _direct_rows(canonical_root, math_index)
-    direct_embeddings = _encode(model, direct_features, device)
-    math_eval_embeddings = _encode(model, math_eval.features, device)
-    auxiliary_embeddings = _encode(model, auxiliary_eval.features, device)
+    direct_embeddings = _encode(model, direct_features, device, math_input_mode)
+    math_eval_embeddings = _encode(model, math_eval.features, device, math_input_mode)
+    auxiliary_embeddings = _encode(model, auxiliary_eval.features, device, auxiliary_input_mode)
     rehearsal_indices = _rehearsal_rows(math_train, punctuation_indices)
     rehearsal_features = np.array(math_train.features[rehearsal_indices], dtype=np.float32, copy=True)
-    rehearsal_embeddings = _encode(model, rehearsal_features, device)
+    rehearsal_embeddings = _encode(model, rehearsal_features, device, math_input_mode)
     rehearsal_labels = torch.from_numpy(np.asarray(math_train.labels[rehearsal_indices], dtype=np.int64))
     base_math_head = _copy_head(model.math_head)
     auxiliary_predictions = _auxiliary_predictions(_copy_head(model.latin_aux_head), auxiliary_embeddings, auxiliary_labels, auxiliary_truth)
@@ -373,6 +388,7 @@ def main() -> int:
             "raw_dataset_mutation": False,
             "external_rehearsal": "math_train only; fixed external holdout excluded",
         },
+        "input_contract": input_contract(args.input_mode),
         "calibration": {
             "punctuation_labels": list(PUNCTUATION),
             "output_rows_only": True,

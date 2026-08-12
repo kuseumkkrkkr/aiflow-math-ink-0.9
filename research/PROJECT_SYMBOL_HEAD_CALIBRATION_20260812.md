@@ -1,8 +1,9 @@
 # Project symbol-head calibration - 2026-08-13
 
 Status: the five-epoch calibration remains the current local research final.
-The seven-epoch external-only base passes writer-LOO calibration gates but is
-not promoted over it. `product_adopted` remains false. This is a box-local
+The seven-epoch and `math-observed-one` eight-epoch external-only bases both
+pass writer-LOO calibration gates but are not promoted over it on a mixed
+Top-1/Top-5 result. `product_adopted` remains false. This is a box-local
 output-head calibration, not a formula recognizer.
 
 ## Scope and split
@@ -41,6 +42,7 @@ changed or used as calibration input.
 | 3-epoch base + `5e-4` calibration | 66.43% / 94.25% | 64.93% / 88.15% | former candidate |
 | **5-epoch base + `5e-4` calibration** | **74.10% / 96.57%** | **66.35% / 91.00%** | **selected** |
 | 7-epoch base + `5e-4` calibration | 76.02% / 96.96% | 64.93% / 89.57% | gates pass; do not replace selected final |
+| 8-epoch `math-observed-one` + `5e-4` calibration | **77.33% / 97.29%** | **66.82% / 88.15%** | gates pass; Top-1/external challenger, Top-5 below selected final |
 
 For the selected candidate, calibration improves its own LOO direct baseline
 from 35.07% / 55.45% to 66.35% / 91.00% (Top-1 / Top-5), a 31.28-point Top-1
@@ -56,6 +58,16 @@ it passes the preset research gates. It remains 1.42 / 1.43 points below the
 five-epoch calibrated LOO result and has lower punctuation accuracy. The same
 three writer groups must not be reused to tune learning rate, duration, or
 rows, so no further correction tuning was performed.
+
+The eight-epoch `math-observed-one` base fixes the UJI-parenthesis
+source-availability leak at the math-head input. Its own LOO direct baseline
+improves from 45.50% / 64.93% to 66.82% / 88.15%; punctuation improves from
+10/32 to 26/32 Top-1 and 12/32 to 30/32 Top-5. Its worst calibrated
+external-math result is 0.41 points above its uncalibrated base, so it passes
+the external regression gate. It improves calibrated Top-1 by 0.47 points
+over the selected five-epoch result, but loses 2.84 Top-5 points. The three
+writer groups are already consumed by this comparison, so it is a recorded
+research challenger rather than an all-writer final checkpoint.
 
 ## Final research checkpoint
 

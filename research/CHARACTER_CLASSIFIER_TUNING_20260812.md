@@ -1,10 +1,10 @@
 # Character classifier tuning and epoch selection - 2026-08-13
 
-Status: the current external-only base is the selected seven-epoch run. It is
-a research-only, box-local classifier: `product_adopted` is false and no
-formula-exact score is claimed. The earlier five-epoch all-writer calibration
-remains the current local final because the new seven-epoch writer-LOO result
-does not surpass it.
+Status: the strongest external-only research challenger is now the eight-epoch
+`math-observed-one` run. It is a box-local classifier only:
+`product_adopted` is false and no formula-exact score is claimed. The earlier
+five-epoch all-writer calibration remains the current local final because its
+writer-LOO Top-5 result remains higher.
 
 ## Fixed scope
 
@@ -116,6 +116,55 @@ worst external-math Top-1 regression is 0.20 points. It is still below the
 five-epoch calibrated 66.35% / 91.00% result, so it is recorded as a passing
 research candidate only and does not replace the current five-epoch final
 calibrated checkpoint.
+
+## Observed-channel audit and targeted repair
+
+The fifth tensor channel is `observed`: it records whether source timestamps
+were available while normalizing a row. It is not a glyph feature. In the
+pre-existing math cache, all 216 UJI parenthesis rows had `observed=0`, while
+the other 150,789 math-training rows had `observed=1`. All 12 direct project
+parentheses had `observed=1`. The seven-epoch frozen model therefore recovered
+all 12 direct parentheses only when that one channel was counterfactually set
+to zero; this is a label-correlated source-availability leak.
+
+Do not remove the parenthesis rows and do not globally delete the channel.
+The global `zero-observed` ablation reduces fixed external Top-1 from 76.02%
+to 74.02%. Instead, `--input-mode math-observed-one` keeps the fixed 128 x 5
+contract and forces the channel to one only for the math head; the auxiliary
+head preserves the original tensor value. Thus UJI parentheses and direct
+math inputs have the same availability value without discarding auxiliary
+time-availability information. The mode is stored in every checkpoint and
+the calibration command rejects a mismatched input mode.
+
+| External-only candidate | Fixed external Top-1 / Top-5 | Raw project Top-1 / Top-5 | Decision |
+|---|---:|---:|---|
+| Seven-epoch preserved channel | 76.02% / 96.96% | 45.02% / 65.88% | former external base |
+| Eight-epoch global `zero-observed` | 74.02% / 96.52% | 42.65% / 69.19% | reject: harms external generalization |
+| Eight-epoch `math-observed-one` | **77.33% / 97.29%** | **45.50% / 64.93%** | passing external research challenger |
+
+The targeted candidate changes direct parentheses from 0/12 to 10/12 Top-1
+and 0/12 to 12/12 Top-5. It does not solve the remaining data-support
+problems: `=` remains untrained in the external math head, and `1` remains
+0/25 Top-1 in raw project evaluation. This is intentionally not hidden by
+synthetic examples or by training on the project evaluation set.
+
+Current approved-corpus support is exact: HWRT/UJI/ISGL/UCI have 0 isolated
+commercial `=` rows; UJI has 120 `(` and 120 `)` rows; and digit `1` appears
+in HWRT (118), UJI (120), and ISGL (115) canonical rows. UJI and ISGL digit
+`1` currently route to the auxiliary head, so moving them into the math head
+would be a separate data-admission and fixed-split experiment, not a side
+effect of this leakage repair. CROHME is evaluation-only/noncommercial and
+BDSHWA has no approved isolated-character boundaries, so neither supplies a
+commercial `=` training row.
+
+The candidate artifact is local and ignored:
+`artifacts/observed_channel_20260813/math_observed_one_external_8ep_selected_full/`.
+Its writer-LOO calibration reaches 66.82% / 88.15% (Top-1 / Top-5), with
+punctuation 26/32 Top-1 and 30/32 Top-5, and passes both preset gates. It
+improves the five-epoch calibrated Top-1 by 0.47 points but is 2.84 points
+below it on Top-5. Keep the existing five-epoch all-writer calibrated
+checkpoint as the local final until a predeclared Top-1-versus-Top-5 product
+criterion and a fresh writer holdout are available.
 
 ## Remaining boundary
 
