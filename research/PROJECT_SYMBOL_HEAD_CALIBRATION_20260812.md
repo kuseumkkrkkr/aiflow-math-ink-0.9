@@ -1,13 +1,15 @@
 # Project symbol-head calibration - 2026-08-13
 
-Status: accepted as a research classifier candidate. `product_adopted` remains
-false. This is a box-local output-head calibration, not a formula recognizer.
+Status: the five-epoch calibration remains the current local research final.
+The seven-epoch external-only base passes writer-LOO calibration gates but is
+not promoted over it. `product_adopted` remains false. This is a box-local
+output-head calibration, not a formula recognizer.
 
 ## Scope and split
 
-- Base: the five-epoch external-only checkpoint in
-  `CHARACTER_CLASSIFIER_TUNING_20260812.md` (372 math outputs and 95 auxiliary
-  outputs).
+- Bases: the five-epoch current final and seven-epoch external-only candidate
+  in `CHARACTER_CLASSIFIER_TUNING_20260812.md` (372 math outputs and 95
+  auxiliary outputs).
 - Project data: 211 manually ownership-grounded symbol trajectories from 47
   formulas across three hashed writer groups. It covers 25 observed math
   labels, including 6 `(`, 6 `)`, and 20 `=` samples.
@@ -38,6 +40,7 @@ changed or used as calibration input.
 |---|---:|---:|---|
 | 3-epoch base + `5e-4` calibration | 66.43% / 94.25% | 64.93% / 88.15% | former candidate |
 | **5-epoch base + `5e-4` calibration** | **74.10% / 96.57%** | **66.35% / 91.00%** | **selected** |
+| 7-epoch base + `5e-4` calibration | 76.02% / 96.96% | 64.93% / 89.57% | gates pass; do not replace selected final |
 
 For the selected candidate, calibration improves its own LOO direct baseline
 from 35.07% / 55.45% to 66.35% / 91.00% (Top-1 / Top-5), a 31.28-point Top-1
@@ -45,12 +48,25 @@ gain. Punctuation improves from 0/32 to 26/32 Top-1 and 31/32 Top-5. The
 weakest calibration fold loses only 0.08 external-math Top-1 points, within
 the one-point gate; all three writer-disjoint folds pass the direct gain gate.
 
+The seven-epoch candidate's own LOO direct baseline improves from 45.02% /
+65.88% to 64.93% / 89.57% (a 19.91-point Top-1 gain). Punctuation improves
+from 0/32 to 22/32 Top-1 and 28/32 Top-5; fold gains are 14.29, 22.37, and
+20.00 Top-1 points, and worst external-math regression is 0.20 points. Thus
+it passes the preset research gates. It remains 1.42 / 1.43 points below the
+five-epoch calibrated LOO result and has lower punctuation accuracy. The same
+three writer groups must not be reused to tune learning rate, duration, or
+rows, so no further correction tuning was performed.
+
 ## Final research checkpoint
 
 `artifacts/training_length_20260812/project_symbol_5ep_final_lr5e-4/`
 contains the current local-only final checkpoint. On the fixed external
 holdout it reaches 74.02% Top-1 / 96.46% Top-5, versus 74.10% / 96.57% for the
 uncalibrated five-epoch base. Math punctuation is 24/24 Top-1 and Top-5.
+
+`artifacts/training_length_20260813/project_symbol_7ep_loo_lr5e-4/` is a
+writer-LOO decision artifact only; no seven-epoch all-writer finalization was
+run. This preserves the LOO result as an independent gate.
 
 Only 25 math-head weight rows and their corresponding bias rows can change;
 the encoder, auxiliary head, and every other math output row are asserted
