@@ -2,6 +2,11 @@
 
 Status: completed research ablation; rejected as the global default.
 
+Follow-up: the uncalibrated model decision below remains valid, but the
+writer-disjoint output-row calibration completed on 2026-08-14 makes uniform
+time the current research candidate for project ink. It is still not product
+adopted; see `HWR_48HZ_WRITER_LOO_RESOLUTION_20260814.md`.
+
 ## Controlled change
 
 - Kept the unified 372-class head, 128x5 input, encoder, seed, sampler,

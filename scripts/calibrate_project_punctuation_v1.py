@@ -51,6 +51,7 @@ CALIBRATION_LEARNING_RATE = 1e-3
 MAX_EXTERNAL_MATH_TOP1_REGRESSION = 0.01
 MIN_DIRECT_TOP1_GAIN = 0.05
 SCHEMA = "aiflow-project-symbol-head-calibration/v2"
+LOO_HEADS_SCHEMA = "aiflow-writer-loo-project-symbol-heads/v1"
 
 
 def _sha256(path: Path) -> str:
@@ -92,6 +93,18 @@ def _load_base(checkpoint_path: Path, math_labels: list[str], auxiliary_labels: 
     model.load_state_dict(checkpoint["state_dict"], strict=True)
     model.eval()
     return model
+
+
+def _checkpoint_layout(checkpoint_path: Path, math_labels: list[str], available_auxiliary_labels: list[str]) -> tuple[list[str], str]:
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    if checkpoint.get("math_labels") != math_labels:
+        raise ValueError("base checkpoint math vocabulary does not match the current canonical corpus")
+    checkpoint_auxiliary = list(checkpoint.get("auxiliary_labels", []))
+    if not checkpoint_auxiliary:
+        return [], "unified-math"
+    if checkpoint_auxiliary == available_auxiliary_labels:
+        return checkpoint_auxiliary, "two-head"
+    raise ValueError("base checkpoint auxiliary vocabulary does not match a supported head layout")
 
 
 @torch.inference_mode()
@@ -144,6 +157,28 @@ def _punctuation_score(truths: list[dict], predictions: dict[str, dict]) -> dict
 def _score(head: nn.Linear, embeddings: torch.Tensor, labels: list[str], truths: list[dict]) -> tuple[dict, dict[str, dict]]:
     predictions = _topk_predictions(head, embeddings, labels, truths)
     return {**score_glyphs_from_rows(truths, predictions), "punctuation": _punctuation_score(truths, predictions)}, predictions
+
+
+def _collision_free_eval_indices(train_features: np.ndarray, eval_features: np.ndarray, input_mode: str) -> tuple[torch.Tensor, dict]:
+    """Exclude evaluation tensors that occur byte-identically in training."""
+    train_hashes: set[bytes] = set()
+    for start in range(0, len(train_features), 1024):
+        batch = apply_input_mode(np.asarray(train_features[start:start + 1024]), input_mode)
+        train_hashes.update(hashlib.sha256(np.ascontiguousarray(row).tobytes()).digest() for row in batch)
+    kept: list[int] = []
+    collisions: list[int] = []
+    for start in range(0, len(eval_features), 1024):
+        batch = apply_input_mode(np.asarray(eval_features[start:start + 1024]), input_mode)
+        for offset, row in enumerate(batch):
+            index = start + offset
+            (collisions if hashlib.sha256(np.ascontiguousarray(row).tobytes()).digest() in train_hashes else kept).append(index)
+    return torch.tensor(kept, dtype=torch.long), {
+        "policy": "exclude_eval_rows_with_byte_identical_model_input_in_training",
+        "train_records": len(train_features),
+        "eval_records": len(eval_features),
+        "excluded_exact_input_collisions": len(collisions),
+        "collision_free_eval_records": len(kept),
+    }
 
 
 def _rehearsal_rows(math_train, punctuation_indices: torch.Tensor) -> np.ndarray:
@@ -263,7 +298,24 @@ def _aggregate_direct(folds: list[dict], key: str) -> dict:
 
 
 def _compact_external(score: dict) -> dict:
-    return {"top1": score["all"]["top1"], "top5": score["all"]["top5"], "math": {"top1": score["math"]["top1"], "top5": score["math"]["top5"], "punctuation": score["math"]["punctuation"]}}
+    math = {"top1": score["math"]["top1"], "top5": score["math"]["top5"], "punctuation": score["math"]["punctuation"]}
+    if "by_source" in score["math"]:
+        math["by_source"] = score["math"]["by_source"]
+    compact = {"top1": score["all"]["top1"], "top5": score["all"]["top5"], "math": math}
+    if "collision_free_math" in score:
+        compact["collision_free_math"] = {
+            "records": score["collision_free_math"]["records"],
+            "top1": score["collision_free_math"]["top1"],
+            "top5": score["collision_free_math"]["top5"],
+        }
+        if "by_source" in score["collision_free_math"]:
+            compact["collision_free_math"]["by_source"] = score["collision_free_math"]["by_source"]
+    return compact
+
+
+def _external_gate_top1(score: dict) -> float:
+    """Use the collision-free subset when exact train/eval copies exist."""
+    return float(score.get("collision_free_math", score["math"])["top1"])
 
 
 def _external_score(
@@ -273,10 +325,15 @@ def _external_score(
     math_truth: list[dict],
     auxiliary_predictions: dict[str, dict],
     auxiliary_truth: list[dict],
+    collision_free_math_indices: torch.Tensor | None = None,
 ) -> dict:
     math_score, math_predictions = _score(head, math_embeddings, math_labels, math_truth)
     combined_predictions = {**math_predictions, **auxiliary_predictions}
-    return {"math": math_score, "all": score_glyphs_from_rows(math_truth + auxiliary_truth, combined_predictions)}
+    result = {"math": math_score, "all": score_glyphs_from_rows(math_truth + auxiliary_truth, combined_predictions)}
+    if collision_free_math_indices is not None:
+        clean_truth = [math_truth[index] for index in collision_free_math_indices.tolist()]
+        result["collision_free_math"] = score_glyphs_from_rows(clean_truth, math_predictions)
+    return result
 
 
 def _auxiliary_predictions(head: nn.Linear, embeddings: torch.Tensor, labels: list[str], truths: list[dict]) -> dict[str, dict]:
@@ -318,6 +375,10 @@ def _self_test() -> None:
         raise AssertionError("output-row integrity check did not fail")
     splits = _writer_split_indices(["a", "b", "a"])
     assert len(splits) == 2 and len(splits[0][2]) == 2
+    train = np.zeros((1, 2, 5), dtype=np.float32)
+    evaluation = np.stack((train[0], np.ones((2, 5), dtype=np.float32)))
+    kept, audit = _collision_free_eval_indices(train, evaluation, "preserve")
+    assert kept.tolist() == [1] and audit["excluded_exact_input_collisions"] == 1
 
 
 def main() -> int:
@@ -347,41 +408,44 @@ def main() -> int:
     cache_dir = _d_path(args.cache_dir, "cache")
     checkpoint_path = _d_path(args.base_checkpoint, "base checkpoint")
     output = _d_path(args.output, "output")
-    if (output / "calibration_report.json").exists() or (output / "project_symbol_head_checkpoint.pt").exists():
+    if any((output / name).exists() for name in ("calibration_report.json", "project_symbol_head_checkpoint.pt", "writer_loo_heads.pt")):
         parser.error(f"calibration output already exists: {output}")
     if not (cache_dir / "cache_manifest.json").is_file():
         parser.error(f"compatible external training cache is required: {cache_dir}")
     device = torch.device(args.device)
     if device.type == "cuda" and not torch.cuda.is_available():
         parser.error("CUDA requested but unavailable")
-    math_labels, auxiliary_labels = load_vocabs(canonical_root)
+    math_labels, available_auxiliary_labels = load_vocabs(canonical_root)
+    auxiliary_labels, head_mode = _checkpoint_layout(checkpoint_path, math_labels, available_auxiliary_labels)
     punctuation_indices = torch.tensor([math_labels.index(label) for label in PUNCTUATION], dtype=torch.long)
-    cache = prepare_cache(canonical_root, cache_dir, math_labels, auxiliary_labels)
+    cache = prepare_cache(canonical_root, cache_dir, math_labels, available_auxiliary_labels, head_mode)
     math_input_mode = input_mode_for_head(args.input_mode, "math")
     auxiliary_input_mode = input_mode_for_head(args.input_mode, "auxiliary")
     math_train = _dataset(cache_dir, cache["sets"]["math_train"], math_input_mode)
     math_eval = _dataset(cache_dir, cache["sets"]["math_eval"], math_input_mode)
-    auxiliary_eval = _dataset(cache_dir, cache["sets"]["auxiliary_eval"], auxiliary_input_mode)
     math_truth = list(_json_lines(cache_dir / cache["sets"]["math_eval"]["truth"]))
-    auxiliary_truth = list(_json_lines(cache_dir / cache["sets"]["auxiliary_eval"]["truth"]))
+    auxiliary_eval = _dataset(cache_dir, cache["sets"]["auxiliary_eval"], auxiliary_input_mode) if auxiliary_labels else None
+    auxiliary_truth = list(_json_lines(cache_dir / cache["sets"]["auxiliary_eval"]["truth"])) if auxiliary_labels else []
     model = _load_base(checkpoint_path, math_labels, auxiliary_labels, device, args.input_mode)
     math_index = {label: index for index, label in enumerate(math_labels)}
     direct_features, direct_labels, writers, direct_truth = _direct_rows(canonical_root, math_index)
     direct_embeddings = _encode(model, direct_features, device, math_input_mode)
     math_eval_embeddings = _encode(model, math_eval.features, device, math_input_mode)
-    auxiliary_embeddings = _encode(model, auxiliary_eval.features, device, auxiliary_input_mode)
+    auxiliary_embeddings = _encode(model, auxiliary_eval.features, device, auxiliary_input_mode) if auxiliary_eval is not None else None
     rehearsal_indices = _rehearsal_rows(math_train, punctuation_indices)
     rehearsal_features = np.array(math_train.features[rehearsal_indices], dtype=np.float32, copy=True)
     rehearsal_embeddings = _encode(model, rehearsal_features, device, math_input_mode)
     rehearsal_labels = torch.from_numpy(np.asarray(math_train.labels[rehearsal_indices], dtype=np.int64))
     base_math_head = _copy_head(model.math_head)
-    auxiliary_predictions = _auxiliary_predictions(_copy_head(model.latin_aux_head), auxiliary_embeddings, auxiliary_labels, auxiliary_truth)
-    base_external = _external_score(base_math_head, math_eval_embeddings, math_labels, math_truth, auxiliary_predictions, auxiliary_truth)
+    auxiliary_predictions = _auxiliary_predictions(_copy_head(model.latin_aux_head), auxiliary_embeddings, auxiliary_labels, auxiliary_truth) if model.latin_aux_head is not None and auxiliary_embeddings is not None else {}
+    collision_free_indices, collision_audit = _collision_free_eval_indices(math_train.features, math_eval.features, math_input_mode)
+    base_external = _external_score(base_math_head, math_eval_embeddings, math_labels, math_truth, auxiliary_predictions, auxiliary_truth, collision_free_indices)
     common = {
         "schema": SCHEMA,
         "base_checkpoint_sha256": _sha256(checkpoint_path),
         "base_checkpoint_name": checkpoint_path.name,
         "seed": SEED,
+        "head_mode": head_mode,
         "data_policy": {
             "project_owned_training": "only real symbol trajectories from non-held hashed writer groups",
             "project_owned_formula_grouping_training": False,
@@ -403,14 +467,17 @@ def main() -> int:
             "rehearsal_records": int(len(rehearsal_indices)),
         },
         "base_external": _compact_external(base_external),
+        "external_holdout_collision_audit": collision_audit,
     }
     if args.leave_one_writer_out:
         folds: list[dict] = []
+        fold_heads: dict[str, dict[str, torch.Tensor]] = {}
         for fold, (writer_group, train_indices, held_indices) in enumerate(_writer_split_indices(writers)):
             calibrated, train_meta = _calibrate_two_stage(base_math_head, direct_embeddings, direct_labels, train_indices, punctuation_indices, rehearsal_embeddings, rehearsal_labels, args.calibration_steps, args.calibration_learning_rate, SEED + fold)
             base_direct, _ = _score(base_math_head, direct_embeddings[held_indices], math_labels, [direct_truth[index] for index in held_indices.tolist()])
             calibrated_direct, _ = _score(calibrated, direct_embeddings[held_indices], math_labels, [direct_truth[index] for index in held_indices.tolist()])
-            calibrated_external = _external_score(calibrated, math_eval_embeddings, math_labels, math_truth, auxiliary_predictions, auxiliary_truth)
+            calibrated_external = _external_score(calibrated, math_eval_embeddings, math_labels, math_truth, auxiliary_predictions, auxiliary_truth, collision_free_indices)
+            fold_heads[writer_group] = {key: value.detach().cpu() for key, value in calibrated.state_dict().items()}
             folds.append({
                 "held_writer_group": writer_group,
                 "held_records": len(held_indices),
@@ -421,12 +488,12 @@ def main() -> int:
             })
         baseline_direct = _aggregate_direct(folds, "base_direct")
         calibrated_direct = _aggregate_direct(folds, "calibrated_direct")
-        external_math_scores = [fold["calibrated_external"]["math"]["top1"] for fold in folds]
+        external_math_scores = [_external_gate_top1(fold["calibrated_external"]) for fold in folds]
         acceptance = {
             "direct_top1_gain": calibrated_direct["top1"] - baseline_direct["top1"],
-            "external_math_top1_worst_regression": base_external["math"]["top1"] - min(external_math_scores),
+            "external_math_top1_worst_regression": _external_gate_top1(base_external) - min(external_math_scores),
             "writer_disjoint_direct_gain_gate": calibrated_direct["top1"] - baseline_direct["top1"] >= MIN_DIRECT_TOP1_GAIN,
-            "external_math_regression_gate": base_external["math"]["top1"] - min(external_math_scores) <= MAX_EXTERNAL_MATH_TOP1_REGRESSION,
+            "external_math_regression_gate": _external_gate_top1(base_external) - min(external_math_scores) <= MAX_EXTERNAL_MATH_TOP1_REGRESSION,
         }
         acceptance["accepted_for_research_candidate"] = acceptance["writer_disjoint_direct_gain_gate"] and acceptance["external_math_regression_gate"]
         report = {
@@ -439,10 +506,18 @@ def main() -> int:
             "product_adopted": False,
             "limit": "three project writer groups are a small research validation set; formula grouping and decoding remain absent",
         }
+        output.mkdir(parents=True, exist_ok=True)
+        torch.save({
+            "schema": LOO_HEADS_SCHEMA,
+            "base_checkpoint_sha256": _sha256(checkpoint_path),
+            "math_labels": math_labels,
+            "input_mode": args.input_mode,
+            "heads_by_held_writer_group": fold_heads,
+        }, output / "writer_loo_heads.pt")
     else:
         all_indices = torch.arange(len(direct_labels), dtype=torch.long)
         calibrated, train_meta = _calibrate_two_stage(base_math_head, direct_embeddings, direct_labels, all_indices, punctuation_indices, rehearsal_embeddings, rehearsal_labels, args.calibration_steps, args.calibration_learning_rate, SEED)
-        calibrated_external = _external_score(calibrated, math_eval_embeddings, math_labels, math_truth, auxiliary_predictions, auxiliary_truth)
+        calibrated_external = _external_score(calibrated, math_eval_embeddings, math_labels, math_truth, auxiliary_predictions, auxiliary_truth, collision_free_indices)
         model.math_head.load_state_dict(calibrated.state_dict())
         report = {
             **common,
