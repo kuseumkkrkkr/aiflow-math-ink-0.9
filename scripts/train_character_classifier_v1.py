@@ -49,6 +49,7 @@ BALANCE_MODES = ("sampler-and-loss", "sampler", "loss", "none")
 # concrete per-tensor transforms used by Dataset instances.
 INPUT_MODES = ("preserve", "zero-observed", "math-observed-one")
 DATASET_INPUT_MODES = ("preserve", "zero-observed", "force-observed-one")
+HEAD_MODES = ("two-head", "unified-math")
 OBSERVED_CHANNEL_INDEX = CHANNELS.index("observed")
 
 
@@ -133,16 +134,20 @@ def load_vocabs(canonical_root: Path) -> tuple[list[str], list[str]]:
     return math_labels + list(EXTRA_MATH_LABELS), aux_labels
 
 
-def _head_for_row(corpus: str, label: str) -> str:
+def _head_for_row(corpus: str, label: str, head_mode: str = "two-head", math_labels: set[str] | None = None) -> str | None:
+    if head_mode == "unified-math":
+        if math_labels is None:
+            raise ValueError("unified-math requires the math vocabulary")
+        return "math" if label in math_labels else None
     if corpus == "uji" and label in MATH_TRANSFERRED_AUXILIARY_LABELS:
         return "math"
     return SOURCE_HEAD[corpus]
 
 
 class InkClassifierV1(nn.Module):
-    """The fixed 128-point, 5-channel, two-head architecture decision."""
+    """The fixed 128-point, 5-channel encoder with one or two output heads."""
 
-    def __init__(self, math_classes: int, auxiliary_classes: int) -> None:
+    def __init__(self, math_classes: int, auxiliary_classes: int | None = None) -> None:
         super().__init__()
         self.input_projection = nn.Sequential(nn.Linear(len(CHANNELS), 128), nn.LayerNorm(128), nn.GELU())
         self.position = nn.Parameter(torch.empty(1, POINTS, 128))
@@ -154,7 +159,7 @@ class InkClassifierV1(nn.Module):
         self.encoder = nn.TransformerEncoder(block, num_layers=4)
         self.pool_score = nn.Linear(128, 1)
         self.math_head = nn.Linear(128, math_classes)
-        self.latin_aux_head = nn.Linear(128, auxiliary_classes)
+        self.latin_aux_head = nn.Linear(128, auxiliary_classes) if auxiliary_classes else None
 
     def encode(self, points: torch.Tensor) -> torch.Tensor:
         if points.ndim != 3 or points.shape[1:] != (POINTS, len(CHANNELS)):
@@ -168,6 +173,8 @@ class InkClassifierV1(nn.Module):
         if head == "math":
             return self.math_head(embedding)
         if head == "auxiliary":
+            if self.latin_aux_head is None:
+                raise ValueError("auxiliary head is disabled")
             return self.latin_aux_head(embedding)
         raise ValueError(f"unknown head: {head}")
 
@@ -227,12 +234,15 @@ def _holdout_ids(canonical_root: Path) -> set[str]:
     return set(json.loads(path.read_text(encoding="utf-8")))
 
 
-def _iter_external_rows(canonical_root: Path, holdout_ids: set[str], label_indices: dict[str, dict[str, int]]) -> Iterator[tuple[str, dict, dict]]:
+def _iter_external_rows(canonical_root: Path, holdout_ids: set[str], label_indices: dict[str, dict[str, int]], head_mode: str = "two-head") -> Iterator[tuple[str, dict, dict]]:
+    math_vocabulary = set(label_indices["math"])
     for corpus in SOURCE_HEAD:
         for row in _json_lines(canonical_root / f"{corpus}.jsonl.gz"):
             record_id = f"{corpus}:{row['record_id']}"
             label = str(row["label"])
-            head = _head_for_row(corpus, label)
+            head = _head_for_row(corpus, label, head_mode, math_vocabulary)
+            if head is None:
+                continue
             if label not in label_indices[head]:
                 raise ValueError(f"unmapped label: {corpus}:{label}")
             split = "eval" if record_id in holdout_ids else "train"
@@ -245,8 +255,8 @@ def _iter_external_rows(canonical_root: Path, holdout_ids: set[str], label_indic
             }
 
 
-def _cache_config(canonical_root: Path, holdout_path: Path, math_labels: list[str], aux_labels: list[str]) -> dict:
-    return {
+def _cache_config(canonical_root: Path, holdout_path: Path, math_labels: list[str], aux_labels: list[str], head_mode: str) -> dict:
+    config = {
         "schema": CACHE_SCHEMA,
         "canonical_manifest_sha256": _sha256(canonical_root / "manifest.json"),
         "holdout_ids_sha256": _sha256(holdout_path),
@@ -254,14 +264,18 @@ def _cache_config(canonical_root: Path, holdout_path: Path, math_labels: list[st
         "channels": list(CHANNELS),
         "math_labels": math_labels,
         "auxiliary_labels": aux_labels,
-        "math_transferred_auxiliary_labels": sorted(MATH_TRANSFERRED_AUXILIARY_LABELS),
+        "math_transferred_auxiliary_labels": sorted(MATH_TRANSFERRED_AUXILIARY_LABELS) if head_mode == "two-head" else [],
     }
+    if head_mode != "two-head":
+        config["head_mode"] = head_mode
+    return config
 
 
-def prepare_cache(canonical_root: Path, cache_dir: Path, math_labels: list[str], aux_labels: list[str]) -> dict:
+def prepare_cache(canonical_root: Path, cache_dir: Path, math_labels: list[str], aux_labels: list[str], head_mode: str = "two-head") -> dict:
     holdout_path = canonical_root / "character_classifier_v1" / "current_external_holdout_ids.json"
     holdout_ids = _holdout_ids(canonical_root)
-    config = _cache_config(canonical_root, holdout_path, math_labels, aux_labels)
+    active_aux_labels = aux_labels if head_mode == "two-head" else []
+    config = _cache_config(canonical_root, holdout_path, math_labels, active_aux_labels, head_mode)
     manifest_path = cache_dir / "cache_manifest.json"
     if manifest_path.is_file():
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -273,16 +287,20 @@ def prepare_cache(canonical_root: Path, cache_dir: Path, math_labels: list[str],
     cache_dir.mkdir(parents=True, exist_ok=True)
     if any(cache_dir.iterdir()):
         raise RuntimeError(f"cache directory is not empty: {cache_dir}")
-    label_indices = {"math": {label: index for index, label in enumerate(math_labels)}, "auxiliary": {label: index for index, label in enumerate(aux_labels)}}
-    names = ("math_train", "math_eval", "auxiliary_train", "auxiliary_eval")
+    label_indices = {"math": {label: index for index, label in enumerate(math_labels)}}
+    if active_aux_labels:
+        label_indices["auxiliary"] = {label: index for index, label in enumerate(active_aux_labels)}
+    names = tuple(f"{head}_{split}" for head in label_indices for split in ("train", "eval"))
     counts = {name: 0 for name in names}
     seen_eval: set[str] = set()
-    for name, _, metadata in _iter_external_rows(canonical_root, holdout_ids, label_indices):
+    for name, _, metadata in _iter_external_rows(canonical_root, holdout_ids, label_indices, head_mode):
         counts[name] += 1
         if name.endswith("_eval"):
             seen_eval.add(metadata["record_id"])
-    if seen_eval != holdout_ids:
+    if head_mode == "two-head" and seen_eval != holdout_ids:
         raise AssertionError("external holdout does not match cache scan")
+    if not seen_eval <= holdout_ids:
+        raise AssertionError("cache evaluation rows are outside the fixed holdout")
     features = {
         name: np.lib.format.open_memmap(cache_dir / f"{name}_features.npy", mode="w+", dtype=np.float32, shape=(count, POINTS, len(CHANNELS)))
         for name, count in counts.items()
@@ -299,7 +317,7 @@ def prepare_cache(canonical_root: Path, cache_dir: Path, math_labels: list[str],
     support = {name: Counter() for name in names}
     sources = {name: Counter() for name in names}
     try:
-        for name, row, metadata in _iter_external_rows(canonical_root, holdout_ids, label_indices):
+        for name, row, metadata in _iter_external_rows(canonical_root, holdout_ids, label_indices, head_mode):
             offset = offsets[name]
             features[name][offset] = tensorize(row)
             labels[name][offset] = metadata["label_index"]
@@ -364,11 +382,12 @@ def _selection_split_indices(
     expected_records: int,
     ratio: float,
     seed: int,
+    head_mode: str = "two-head",
 ) -> tuple[np.ndarray, np.ndarray]:
     """Hold out a deterministic source-label slice while retaining every group in training."""
     groups: dict[str, list[tuple[int, str]]] = {}
     offsets: Counter[str] = Counter()
-    for name, _, metadata in _iter_external_rows(canonical_root, holdout_ids, label_indices):
+    for name, _, metadata in _iter_external_rows(canonical_root, holdout_ids, label_indices, head_mode):
         index = offsets[name]
         offsets[name] += 1
         if name == split_name:
@@ -519,12 +538,21 @@ def _self_test() -> None:
     points = torch.zeros(2, POINTS, len(CHANNELS))
     assert model(points, "math").shape == (2, 372)
     assert model(points, "auxiliary").shape == (2, 95)
+    unified = InkClassifierV1(372)
+    assert unified(points, "math").shape == (2, 372)
+    try:
+        unified(points, "auxiliary")
+        raise AssertionError("disabled auxiliary head accepted input")
+    except ValueError:
+        pass
     assert _balance_flags("sampler-and-loss") == (True, True)
     assert _balance_flags("sampler") == (True, False)
     assert _balance_flags("loss") == (False, True)
     assert _balance_flags("none") == (False, False)
     assert _head_for_row("uji", "(") == "math"
     assert _head_for_row("uji", "A") == "auxiliary"
+    assert _head_for_row("uji", "A", "unified-math", {"A"}) == "math"
+    assert _head_for_row("uji", "!", "unified-math", {"A"}) is None
     observed = np.ones((POINTS, len(CHANNELS)), dtype=np.float32)
     masked = apply_input_mode(observed, "zero-observed")
     assert np.all(masked[:, OBSERVED_CHANNEL_INDEX] == 0.0)
@@ -552,6 +580,7 @@ def main() -> int:
     parser.add_argument("--balance-mode", choices=BALANCE_MODES, default="sampler")
     parser.add_argument("--cache-dir", type=Path, help="reuse a compatible D: cache across controlled trials")
     parser.add_argument("--input-mode", choices=INPUT_MODES, default="preserve", help="preserve source-time availability, mask it globally, or force it to one only for the math head")
+    parser.add_argument("--head-mode", choices=HEAD_MODES, default="two-head", help="retain the auxiliary pretraining head or train one fixed 372-class math head")
     parser.add_argument("--seed", type=int, default=20260812)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--log-every", type=int, default=250)
@@ -581,22 +610,23 @@ def main() -> int:
     device = torch.device(args.device if args.device == "cpu" or torch.cuda.is_available() else "cpu")
     _seed_everything(args.seed)
     output.mkdir(parents=True, exist_ok=True)
-    math_labels, aux_labels = load_vocabs(args.canonical_root)
-    cache = prepare_cache(args.canonical_root, cache_dir, math_labels, aux_labels)
+    math_labels, all_aux_labels = load_vocabs(args.canonical_root)
+    aux_labels = all_aux_labels if args.head_mode == "two-head" else []
+    cache = prepare_cache(args.canonical_root, cache_dir, math_labels, all_aux_labels, args.head_mode)
     math_input_mode = input_mode_for_head(args.input_mode, "math")
     auxiliary_input_mode = input_mode_for_head(args.input_mode, "auxiliary")
     math_train_full = _dataset(cache_dir, cache["sets"]["math_train"], math_input_mode)
-    aux_train_full = _dataset(cache_dir, cache["sets"]["auxiliary_train"], auxiliary_input_mode)
+    aux_train_full = _dataset(cache_dir, cache["sets"]["auxiliary_train"], auxiliary_input_mode) if aux_labels else None
+    aux_train = None
     selection_report: dict = {"enabled": False}
     if selection_enabled:
-        label_indices = {"math": {label: index for index, label in enumerate(math_labels)}, "auxiliary": {label: index for index, label in enumerate(aux_labels)}}
+        label_indices = {"math": {label: index for index, label in enumerate(math_labels)}}
+        if aux_labels:
+            label_indices["auxiliary"] = {label: index for index, label in enumerate(aux_labels)}
         holdout_ids = _holdout_ids(args.canonical_root)
-        math_train_indices, math_selection_indices = _selection_split_indices(args.canonical_root, holdout_ids, label_indices, "math_train", len(math_train_full), args.selection_validation_ratio, args.selection_validation_seed)
-        aux_train_indices, aux_selection_indices = _selection_split_indices(args.canonical_root, holdout_ids, label_indices, "auxiliary_train", len(aux_train_full), args.selection_validation_ratio, args.selection_validation_seed)
+        math_train_indices, math_selection_indices = _selection_split_indices(args.canonical_root, holdout_ids, label_indices, "math_train", len(math_train_full), args.selection_validation_ratio, args.selection_validation_seed, args.head_mode)
         math_train, math_selection = IndexedDataset(math_train_full, math_train_indices), IndexedDataset(math_train_full, math_selection_indices)
-        aux_train, aux_selection = IndexedDataset(aux_train_full, aux_train_indices), IndexedDataset(aux_train_full, aux_selection_indices)
         math_selection_truth = _selection_truth(math_selection, math_labels, "math")
-        aux_selection_truth = _selection_truth(aux_selection, aux_labels, "auxiliary")
         selection_report = {
             "enabled": True,
             "ratio": args.selection_validation_ratio,
@@ -605,26 +635,41 @@ def main() -> int:
             "selection_metric": "all_glyph_top1_then_top5_earliest_epoch",
             "fixed_external_holdout_used_for_selection": False,
             "math": {"training_records": len(math_train), "selection_records": len(math_selection), "selection_indices_sha256": _indices_sha256(math_selection.indices)},
-            "auxiliary": {"training_records": len(aux_train), "selection_records": len(aux_selection), "selection_indices_sha256": _indices_sha256(aux_selection.indices)},
         }
+        if aux_labels:
+            assert aux_train_full is not None
+            aux_train_indices, aux_selection_indices = _selection_split_indices(args.canonical_root, holdout_ids, label_indices, "auxiliary_train", len(aux_train_full), args.selection_validation_ratio, args.selection_validation_seed, args.head_mode)
+            aux_train, aux_selection = IndexedDataset(aux_train_full, aux_train_indices), IndexedDataset(aux_train_full, aux_selection_indices)
+            aux_selection_truth = _selection_truth(aux_selection, aux_labels, "auxiliary")
+            selection_report["auxiliary"] = {"training_records": len(aux_train), "selection_records": len(aux_selection), "selection_indices_sha256": _indices_sha256(aux_selection.indices)}
     else:
         math_train, aux_train = math_train_full, aux_train_full
     math_loader, math_weights = _class_balanced_loader(math_train, math_train.labels, args.batch_size, args.seed, len(math_labels), device.type == "cuda", args.balance_mode)
-    aux_loader, aux_weights = _class_balanced_loader(aux_train, aux_train.labels, args.batch_size, args.seed + 1, len(aux_labels), device.type == "cuda", args.balance_mode)
-    model = InkClassifierV1(len(math_labels), len(aux_labels)).to(device)
+    if aux_labels:
+        assert aux_train is not None
+        aux_loader, aux_weights = _class_balanced_loader(aux_train, aux_train.labels, args.batch_size, args.seed + 1, len(aux_labels), device.type == "cuda", args.balance_mode)
+    model = InkClassifierV1(len(math_labels), len(aux_labels) or None).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=WEIGHT_DECAY)
     scaler = torch.amp.GradScaler(device.type, enabled=device.type == "cuda")
     math_weights = math_weights.to(device)
-    aux_weights = aux_weights.to(device)
-    print(json.dumps({"event": "training_start", "device": str(device), "epochs": args.epochs, "learning_rate": args.learning_rate, "balance_mode": args.balance_mode, "input_mode": args.input_mode, "math_train": len(math_train), "auxiliary_train": len(aux_train), "selection_validation": selection_report["enabled"], "fixed_external_holdout_scored": False}, ensure_ascii=False), flush=True)
+    if aux_labels:
+        aux_weights = aux_weights.to(device)
+    print(json.dumps({"event": "training_start", "device": str(device), "epochs": args.epochs, "learning_rate": args.learning_rate, "balance_mode": args.balance_mode, "input_mode": args.input_mode, "head_mode": args.head_mode, "math_train": len(math_train), "auxiliary_train": len(aux_train) if aux_train is not None else 0, "selection_validation": selection_report["enabled"], "fixed_external_holdout_scored": False}, ensure_ascii=False), flush=True)
     history = []
     best_selection: dict | None = None
     best_selection_state: dict[str, torch.Tensor] | None = None
     started = time.perf_counter()
     for epoch in range(1, args.epochs + 1):
-        epoch_report = {"epoch": epoch, "math": train_head(model, optimizer, scaler, math_loader, math_weights, "math", device, epoch, args.log_every), "auxiliary": train_head(model, optimizer, scaler, aux_loader, aux_weights, "auxiliary", device, epoch, args.log_every)}
+        epoch_report = {"epoch": epoch, "math": train_head(model, optimizer, scaler, math_loader, math_weights, "math", device, epoch, args.log_every)}
+        if aux_labels:
+            epoch_report["auxiliary"] = train_head(model, optimizer, scaler, aux_loader, aux_weights, "auxiliary", device, epoch, args.log_every)
         if selection_enabled:
-            selection_score = _selection_score(model, math_selection, math_selection_truth, math_labels, aux_selection, aux_selection_truth, aux_labels, device, args.eval_batch_size)
+            if aux_labels:
+                selection_score = _selection_score(model, math_selection, math_selection_truth, math_labels, aux_selection, aux_selection_truth, aux_labels, device, args.eval_batch_size)
+            else:
+                math_predictions = predict(model, math_selection, math_selection_truth, math_labels, "math", device, args.eval_batch_size)
+                math_score = score_glyphs_from_rows(math_selection_truth, math_predictions)
+                selection_score = {"all": math_score, "math": math_score}
             epoch_report["selection_validation"] = selection_score
             current = selection_score["all"]
             if best_selection is None or (current["top1"], current["top5"]) > (best_selection["top1"], best_selection["top5"]):
@@ -644,15 +689,17 @@ def main() -> int:
     else:
         math_index = {label: index for index, label in enumerate(math_labels)}
         math_eval = _dataset(cache_dir, cache["sets"]["math_eval"], math_input_mode)
-        aux_eval = _dataset(cache_dir, cache["sets"]["auxiliary_eval"], auxiliary_input_mode)
         math_truth = _read_truth(cache_dir / cache["sets"]["math_eval"]["truth"])
-        aux_truth = _read_truth(cache_dir / cache["sets"]["auxiliary_eval"]["truth"])
         direct_eval, direct_truth = direct_ownership_dataset(args.canonical_root, math_index, math_input_mode)
-        external_predictions = {}
-        external_predictions.update(predict(model, math_eval, math_truth, math_labels, "math", device, args.eval_batch_size))
-        external_predictions.update(predict(model, aux_eval, aux_truth, aux_labels, "auxiliary", device, args.eval_batch_size))
+        external_predictions = predict(model, math_eval, math_truth, math_labels, "math", device, args.eval_batch_size)
+        external_truth = math_truth
+        if aux_labels:
+            aux_eval = _dataset(cache_dir, cache["sets"]["auxiliary_eval"], auxiliary_input_mode)
+            aux_truth = _read_truth(cache_dir / cache["sets"]["auxiliary_eval"]["truth"])
+            external_predictions.update(predict(model, aux_eval, aux_truth, aux_labels, "auxiliary", device, args.eval_batch_size))
+            external_truth += aux_truth
         direct_predictions = predict(model, direct_eval, direct_truth, math_labels, "math", device, args.eval_batch_size)
-        external_score = score_glyphs_from_rows(math_truth + aux_truth, external_predictions)
+        external_score = score_glyphs_from_rows(external_truth, external_predictions)
         direct_score = score_glyphs_from_rows(direct_truth, direct_predictions)
         _write_predictions(output / "external_holdout_predictions.jsonl", external_predictions)
         _write_predictions(output / "direct_ownership_predictions.jsonl", direct_predictions)
@@ -666,8 +713,8 @@ def main() -> int:
         "seed": args.seed,
         "optimization": {"optimizer": "AdamW", "learning_rate": args.learning_rate, "weight_decay": WEIGHT_DECAY, "balance_mode": args.balance_mode, "gradient_clip_norm": 1.0, "scheduler": "none", "warmup_steps": 0},
         "input_contract": input_contract(args.input_mode),
-        "architecture": {"input": [POINTS, len(CHANNELS)], "projection": [len(CHANNELS), 128], "transformer_blocks": 4, "hidden": 128, "attention_heads": 4, "math_head": len(math_labels), "auxiliary_head": len(aux_labels)},
-        "data_admission": {"train_sources": SOURCE_HEAD, "math_transferred_auxiliary_labels": sorted(MATH_TRANSFERRED_AUXILIARY_LABELS), "project_owned_training": False, "bdshwa_training": False, "crohme_training": False, "holdout_fixed_before_training": True},
+        "architecture": {"input": [POINTS, len(CHANNELS)], "projection": [len(CHANNELS), 128], "transformer_blocks": 4, "hidden": 128, "attention_heads": 4, "head_mode": args.head_mode, "math_head": len(math_labels), "auxiliary_head": len(aux_labels)},
+        "data_admission": {"train_sources": SOURCE_HEAD if args.head_mode == "two-head" else {source: "math_if_exact_label_match" for source in SOURCE_HEAD}, "math_transferred_auxiliary_labels": sorted(MATH_TRANSFERRED_AUXILIARY_LABELS) if args.head_mode == "two-head" else [], "project_owned_training": False, "bdshwa_training": False, "crohme_training": False, "holdout_fixed_before_training": True},
         "cache": cache,
         "selection_validation": selection_report,
         "history": history,
