@@ -45,11 +45,12 @@ MATH_TRANSFERRED_AUXILIARY_LABELS = frozenset({"(", ")"})
 DEFAULT_EPOCHS = 2
 WEIGHT_DECAY = 1e-2
 BALANCE_MODES = ("sampler-and-loss", "sampler", "loss", "none")
-# ``math-observed-one`` is a head policy, while the three data modes are the
+# ``math-observed-one`` is a head policy, while the data modes are the
 # concrete per-tensor transforms used by Dataset instances.
-INPUT_MODES = ("preserve", "zero-observed", "math-observed-one")
-DATASET_INPUT_MODES = ("preserve", "zero-observed", "force-observed-one")
+INPUT_MODES = ("preserve", "zero-observed", "math-observed-one", "uniform-time")
+DATASET_INPUT_MODES = ("preserve", "zero-observed", "force-observed-one", "uniform-time")
 HEAD_MODES = ("two-head", "unified-math")
+DELTA_T_CHANNEL_INDEX = CHANNELS.index("delta_t")
 OBSERVED_CHANNEL_INDEX = CHANNELS.index("observed")
 
 
@@ -63,6 +64,10 @@ def apply_input_mode(features: np.ndarray, input_mode: str) -> np.ndarray:
     if input_mode == "zero-observed":
         adjusted[..., OBSERVED_CHANNEL_INDEX] = 0.0
     if input_mode == "force-observed-one":
+        adjusted[..., OBSERVED_CHANNEL_INDEX] = 1.0
+    if input_mode == "uniform-time":
+        adjusted[..., DELTA_T_CHANNEL_INDEX] = 1.0 / max(adjusted.shape[-2] - 1, 1)
+        adjusted[..., 0, DELTA_T_CHANNEL_INDEX] = 0.0
         adjusted[..., OBSERVED_CHANNEL_INDEX] = 1.0
     return adjusted
 
@@ -85,6 +90,10 @@ def input_contract(input_mode: str) -> dict:
         "preserve": "preserve_tensorized_source_availability",
         "zero-observed": "constant_zero_for_source_invariance",
         "math-observed-one": "math_head_constant_one_to_remove_uji_parenthesis_source_cue;_auxiliary_preserves_tensorized_source_availability",
+        "uniform-time": "constant_one_for_source_invariance",
+    }
+    time_policies = {
+        "uniform-time": "normalized_sequence_progress:first_zero_then_1/(points-1)",
     }
     return {
         "channels": list(CHANNELS),
@@ -92,6 +101,7 @@ def input_contract(input_mode: str) -> dict:
         "math_observed_transform": math_mode,
         "auxiliary_observed_transform": auxiliary_mode,
         "observed_channel_policy": policies[input_mode],
+        "delta_t_policy": time_policies.get(input_mode, "preserve_tensorized_relative_delta_time"),
     }
 
 
@@ -561,6 +571,14 @@ def _self_test() -> None:
     assert np.all(apply_input_mode(np.zeros_like(observed), "force-observed-one")[:, OBSERVED_CHANNEL_INDEX] == 1.0)
     assert input_mode_for_head("math-observed-one", "math") == "force-observed-one"
     assert input_mode_for_head("math-observed-one", "auxiliary") == "preserve"
+    temporal = np.random.default_rng(7).random((POINTS, len(CHANNELS)), dtype=np.float32)
+    uniform = apply_input_mode(temporal, "uniform-time")
+    assert uniform[0, DELTA_T_CHANNEL_INDEX] == 0.0
+    assert np.allclose(uniform[1:, DELTA_T_CHANNEL_INDEX], 1.0 / (POINTS - 1))
+    assert np.isclose(uniform[:, DELTA_T_CHANNEL_INDEX].sum(), 1.0)
+    assert np.all(uniform[:, OBSERVED_CHANNEL_INDEX] == 1.0)
+    assert np.array_equal(uniform[:, :2], temporal[:, :2])
+    assert np.array_equal(uniform[:, 3], temporal[:, 3])
     assert _checkpoint_contract(2) == (PILOT_SCHEMA, "two_epoch_checkpoint.pt")
     assert _checkpoint_contract(3) == (EXTERNAL_TRAINING_SCHEMA, "classifier_checkpoint.pt")
     assert _checkpoint_contract(5, True) == (SELECTION_TRAINING_SCHEMA, "selection_checkpoint.pt")
@@ -579,7 +597,7 @@ def main() -> int:
     parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument("--balance-mode", choices=BALANCE_MODES, default="sampler")
     parser.add_argument("--cache-dir", type=Path, help="reuse a compatible D: cache across controlled trials")
-    parser.add_argument("--input-mode", choices=INPUT_MODES, default="preserve", help="preserve source-time availability, mask it globally, or force it to one only for the math head")
+    parser.add_argument("--input-mode", choices=INPUT_MODES, default="preserve", help="preserve source time, mask its availability, or replace timing with uniform 128-step sequence progress")
     parser.add_argument("--head-mode", choices=HEAD_MODES, default="two-head", help="retain the auxiliary pretraining head or train one fixed 372-class math head")
     parser.add_argument("--seed", type=int, default=20260812)
     parser.add_argument("--device", default="cuda")
