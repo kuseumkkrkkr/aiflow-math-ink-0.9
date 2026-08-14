@@ -48,3 +48,9 @@ CROHME2019 CC BY-NC valid 985식에서는 truth-group 문자 Top-1이 56.96%→7
 - CROHME2019은 비상업 검증으로만 사용
 - 자동채점 모델이 아니라 필기 인식 연구 후보
 - writer-disjoint 실사용 검증과 독립 guard threshold 검증은 아직 필요
+
+## 1.0 MASK 문맥 재랭커
+
+Google BERT-Tiny에 372개 문자 token과 7개 공간관계 token을 추가한 후보 보존형 재랭커를 구현했다. 프로젝트 ownership 47식만 학습하고 CROHME는 전이 평가에만 사용했다. 직접 writer-LOO Top-1은 73.46%→84.36%, CROHME 지원 문자 Top-1은 69.50%→76.36%였지만, 프로젝트 학습원에 `|·O·o` 정답이 없어 CROHME strict macro가 42.64%→37.69%로 하락했다.
+
+따라서 체크포인트는 shadow component로 생성했으며 기존 372-head의 기본 출력을 자동 교체하지 않았다. 구조·지표·동형문자별 실패와 재현 방법은 [research/MASKED_CONTEXT_BERT_TINY_20260814.md](research/MASKED_CONTEXT_BERT_TINY_20260814.md)에 기록했다.
