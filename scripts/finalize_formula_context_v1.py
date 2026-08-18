@@ -10,6 +10,7 @@ context model is followed by equation, locked-fence, and horizontal-infix guards
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import gzip
 import json
 import math
@@ -78,6 +79,31 @@ def _runtime_rows(rows: list[dict], labels: set[str]) -> list[dict]:
     return clean
 
 
+def _decision_metadata(
+    row: dict, hwr: str, context_token: str, equation_token: str,
+    fence_token: str, final_token: str,
+) -> tuple[bool, str, str]:
+    context_available = int(row["context"]["length"]) > 1
+    if not context_available:
+        source = "context_prior_only" if final_token != hwr else "hwr_top1_no_context"
+    elif final_token != fence_token:
+        source = "semantic_infix_guard"
+    elif fence_token != equation_token:
+        source = "semantic_fence_guard"
+    elif equation_token != context_token:
+        source = "semantic_equation_guard"
+    elif context_token != hwr:
+        source = "owned_formula_context"
+    else:
+        source = "owned_context_retained_hwr"
+    status = (
+        "ambiguous_no_formula_context"
+        if not context_available and len(row["final_topk"]) > 1
+        else "finalized"
+    )
+    return context_available, status, source
+
+
 class OwnedFormulaContextFinalizer:
     def __init__(
         self, checkpoint: Path, hwr_checkpoint: Path = DEFAULT_PRODUCT,
@@ -128,6 +154,8 @@ class OwnedFormulaContextFinalizer:
                 "infix": infix_audit,
             }
         else:
+            equation_predictions = context_predictions
+            fence_predictions = context_predictions
             predictions = context_predictions
             semantic_audit = {"enabled": False}
         output = []
@@ -136,11 +164,22 @@ class OwnedFormulaContextFinalizer:
             prediction = str(predictions[record_id])
             if prediction not in row["final_topk"]:
                 raise AssertionError("context finalizer invented a candidate")
+            context_available, decision_status, decision_source = _decision_metadata(
+                row,
+                str(row["final_topk"][0]),
+                str(context_predictions[record_id]),
+                str(equation_predictions[record_id]),
+                str(fence_predictions[record_id]),
+                prediction,
+            )
             output.append({
-                "schema": "aiflow-formula-context-finalized/v3",
+                "schema": "aiflow-formula-context-finalized/v4",
                 "record_id": record_id,
                 "formula_id": str(row["formula_id"]),
                 "context_index": int(row["context"]["index"]),
+                "context_available": context_available,
+                "decision_status": decision_status,
+                "decision_source": decision_source,
                 "hwr_top1": str(row["final_topk"][0]),
                 "finalized_top1": prediction,
                 "changed": prediction != str(row["final_topk"][0]),
@@ -161,6 +200,8 @@ class OwnedFormulaContextFinalizer:
             "records": len(output),
             "formulas": len({row["formula_id"] for row in output}),
             "changed": sum(bool(row["changed"]) for row in output),
+            "decision_status": dict(Counter(row["decision_status"] for row in output)),
+            "decision_source": dict(Counter(row["decision_source"] for row in output)),
             "candidate_preservation_rate": 1.0,
             "new_tokens": 0,
             "deleted_glyphs": 0,
@@ -190,6 +231,13 @@ def _self_test() -> None:
     clean = _runtime_rows(rows, labels)
     assert "label" not in clean[0]
     assert clean[0]["final_topk"] == ["1", "+"]
+    assert _decision_metadata(clean[0], "1", "+", "+", "+", "+") == (
+        False, "ambiguous_no_formula_context", "context_prior_only",
+    )
+    contextual = {**clean[0], "context": {"index": 1, "length": 3}}
+    assert _decision_metadata(contextual, "1", "1", "1", "1", "+") == (
+        True, "finalized", "semantic_infix_guard",
+    )
     try:
         _runtime_rows([{**rows[0], "final_topk": ["1", "x"]}], labels)
     except ValueError:

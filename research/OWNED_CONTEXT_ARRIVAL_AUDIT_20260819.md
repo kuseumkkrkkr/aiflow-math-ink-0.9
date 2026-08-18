@@ -96,9 +96,19 @@ r6은 각 글자를 문맥으로 재정렬하지만 수식 전체가 실제로 �
 
 - 최종 평가: `D:\AIFlow-Workspace\PrivateData\math-ink-data-collector\derived\context-candidates-20260819-r3\r6_semantic_eval_r7.json`
 - 평가 SHA-256: `cf07ec54d58c532517ad2a576685e3fb0ad9ff6cf84c91559e47f8596e93369e`
-- 정답 없는 런타임 출력: `D:\AIFlow-Workspace\PrivateData\math-ink-data-collector\derived\context-candidates-20260819-r3\runtime-r6-semantic-r7.jsonl.gz`
-- 런타임 출력 SHA-256: `35de64287f8e4360a5205128158bc3b2be4049aeb54adc7d7f2c252fc73a9dce`
+- 정답 없는 런타임 출력: `D:\AIFlow-Workspace\PrivateData\math-ink-data-collector\derived\context-candidates-20260819-r3\runtime-r6-semantic-r8.jsonl.gz`
+- 런타임 출력 SHA-256: `3efeed4e00070d0b78691be999ed9a2a081a7b20d8b3af1fa8dde9e5ee0d56be`
 - 런타임·평가 예측 불일치 0건, CPU·GPU 예측 불일치 0건, 런타임 `label` 필드 0건
+
+## r7 잔여 오답 탈출구 감사
+
+최종 387글자 중 오답은 47개다. 이 가운데 25개는 정답이 HWR Top-5에 없어 후보 보존 문맥 레이어가 복구할 수 없다. 나머지 22개 중 2개는 길이 1의 고립 기호이고 5개는 `x/χ`, `b/h`, `−/`처럼 같은 역할 안의 형상 동형이다. 전체 Top-5 ceiling은 93.54%다.
+
+- 완성 수식 경계의 `/·÷·×·⋅`를 숫자로 바꾸는 규칙은 기존 47식에서만 3개를 고쳤다. 세 후보 모두 r6 확률비 하한보다 낮고 신규·CROHME 적용 사례가 0개라 채택하지 않았다.
+- `5 4 4→5+4` 규칙은 같은 슬롯 Top-5에 `+`와 `÷`가 함께 있어 문맥 후보가 유일하지 않으므로 채택하지 않았다.
+- 길이 1을 HWR Top-1로 강제 복귀하면 직접 수집 정답 1개가 깨졌다. 예측은 유지하고 맥락 부재 상태만 노출한다.
+
+따라서 현재 후보 집합 안에서 직접·신규·CROHME 비회귀로 증명된 추가 Top-1 규칙은 없다. 다음 정확도 상승은 HWR Top-5 밖 25개를 줄이는 형상 후보 개선과, `|·o`를 포함한 새 프로젝트 소유 untouched 수식 맥락이 필요하다.
 
 ## 정답 없는 제품 추론 경계
 
@@ -119,6 +129,8 @@ r6은 각 글자를 문맥으로 재정렬하지만 수식 전체가 실제로 �
 - grouping mutation 0
 - 체크포인트와 HWR vocabulary/hash 불일치 시 즉시 실패
 
+출력 v4는 호환 `finalized_top1`에 더해 `context_available`, `decision_status`, `decision_source`를 제공한다. 수식 길이가 1이고 후보가 둘 이상이면 `ambiguous_no_formula_context`이며, 소비자는 이를 문맥 확정 결과로 취급하면 안 된다.
+
 ```powershell
 $env:PYTHONNOUSERSITE='1'
 python scripts\finalize_formula_context_v1.py `
@@ -128,7 +140,7 @@ python scripts\finalize_formula_context_v1.py `
   --device cpu
 ```
 
-387글자 전체에서 정답 필드를 제거한 뒤 실행한 결과, 최종 평가 예측과 불일치 0건, 후보 보존율 100%, 새 token 0, 삭제 0, grouping mutation 0을 확인했다.
+387글자 전체에서 정답 필드를 제거한 뒤 실행한 결과, 기존 v3·최종 평가 예측과 불일치 0건, 후보 보존율 100%, 새 token 0, 삭제 0, grouping mutation 0을 확인했다. 374글자는 `finalized`, 맥락이 없는 단일 글자 13개는 `ambiguous_no_formula_context`다.
 
 ## 승격 조건
 
