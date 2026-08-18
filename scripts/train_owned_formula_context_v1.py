@@ -361,7 +361,7 @@ def _components(
     model: OwnedFormulaContext, contract: dict, rows: list[dict], grammar: dict,
     device: torch.device, batch_size: int,
 ) -> dict:
-    packed = masked._pack(rows, contract)
+    packed = _pack_runtime(rows, contract)
     role_parts, class_parts = [], []
     model.eval()
     for start in range(0, len(rows), batch_size):
@@ -387,6 +387,66 @@ def _components(
     return context._assemble_role_components(
         packed["rows"], candidate_logits, candidate_mask, rows, grammar, role_scores
     )
+
+
+def _pack_runtime(rows: list[dict], contract: dict) -> dict:
+    """Build masked formula inputs without requiring unavailable truth labels."""
+    examples = []
+    label_to_index = contract["label_to_index"]
+    for formula_id, sequence in masked._formulae(rows).items():
+        relations = [
+            masked._spatial_relation(sequence[index - 1], sequence[index])
+            for index in range(1, len(sequence))
+        ]
+        for target_index, target in enumerate(sequence):
+            ids = [contract["cls_id"]]
+            mask_position = -1
+            for index, row in enumerate(sequence):
+                if index:
+                    ids.append(contract["relation_ids"][relations[index - 1]])
+                if index == target_index:
+                    mask_position = len(ids)
+                    ids.append(contract["mask_id"])
+                else:
+                    token = str(row["final_topk"][0])
+                    if token not in label_to_index:
+                        raise ValueError(
+                            f"HWR context token outside 372 classes: {token}"
+                        )
+                    ids.append(contract["class_ids"][label_to_index[token]])
+            ids.append(contract["sep_id"])
+            if mask_position < 0 or len(ids) > 512:
+                raise ValueError(f"masked sequence exceeds context contract: {formula_id}")
+            examples.append({
+                "row": target,
+                "input_ids": ids,
+                "mask_position": mask_position,
+            })
+    if not examples:
+        raise ValueError("context finalizer requires at least one candidate row")
+    if {str(example["row"]["record_id"]) for example in examples} != {
+        str(row["record_id"]) for row in rows
+    }:
+        raise AssertionError("runtime masked-context example coverage mismatch")
+    width = max(len(example["input_ids"]) for example in examples)
+    input_ids = torch.full(
+        (len(examples), width), int(contract["pad_id"]), dtype=torch.long
+    )
+    attention_mask = torch.zeros((len(examples), width), dtype=torch.long)
+    mask_positions = torch.empty(len(examples), dtype=torch.long)
+    for index, example in enumerate(examples):
+        length = len(example["input_ids"])
+        input_ids[index, :length] = torch.tensor(
+            example["input_ids"], dtype=torch.long
+        )
+        attention_mask[index, :length] = 1
+        mask_positions[index] = int(example["mask_position"])
+    return {
+        "rows": [example["row"] for example in examples],
+        "input_ids": input_ids,
+        "attention_mask": attention_mask,
+        "mask_positions": mask_positions,
+    }
 
 
 def _configuration_grid() -> list[dict | None]:
@@ -704,6 +764,27 @@ def _self_test(labels: list[str], device: torch.device) -> None:
     assert role_logits.shape == (8, len(context.ROLES))
     assert class_logits.shape == (8, len(labels))
     assert sum(parameter.numel() for parameter in model.parameters()) < 1_000_000
+    runtime_rows = [
+        {
+            "record_id": "runtime-0", "formula_id": "runtime", "label": "1",
+            "final_topk": ["1", "+"],
+            "context": {"index": 0, "length": 2},
+            "geometry": {"center_x": 0.0, "center_y": 0.0, "width_rel": 0.5, "height_rel": 1.0},
+        },
+        {
+            "record_id": "runtime-1", "formula_id": "runtime", "label": "+",
+            "final_topk": ["+", "1"],
+            "context": {"index": 1, "length": 2},
+            "geometry": {"center_x": 1.0, "center_y": 0.0, "width_rel": 1.0, "height_rel": 1.0},
+        },
+    ]
+    training_pack = masked._pack(runtime_rows, contract)
+    runtime_pack = _pack_runtime(
+        [{key: value for key, value in row.items() if key != "label"} for row in runtime_rows],
+        contract,
+    )
+    for key in ("input_ids", "attention_mask", "mask_positions"):
+        assert torch.equal(training_pack[key], runtime_pack[key])
     assert _aggregate_fold_configuration([
         {"selection": {"configuration": {"weight": 0.25}}},
         {"selection": {"configuration": {"weight": 1.0}}},
@@ -780,6 +861,11 @@ def main() -> int:
     crohme_path = input_root / "crohme_candidates.jsonl.gz"
     direct_rows = list(_json_lines(direct_path))
     crohme_rows = list(_json_lines(crohme_path))
+    direct_formula_count = len({str(row["formula_id"]) for row in direct_rows})
+    direct_writer_count = len({str(row["writer_group"]) for row in direct_rows})
+    direct_partitions = dict(Counter(
+        str(row.get("evaluation_partition", "unspecified")) for row in direct_rows
+    ))
     _set_seed(SEED)
     _event(
         "owned_context_start", device=str(device), direct_records=len(direct_rows),
@@ -844,7 +930,10 @@ def main() -> int:
         },
         "external_pretrained_weights": False,
         "external_text_corpus": False,
-        "training_data": "project-owned 47 formulas plus deterministic owned formula DSL",
+        "training_data": (
+            f"project-owned {direct_formula_count} formulas / {len(direct_rows)} glyphs / "
+            f"{direct_writer_count} writers plus deterministic owned formula DSL"
+        ),
         "synthetic_seed": SEED,
         "synthetic_train_examples": args.synthetic_train_examples,
         "real_repeat": REAL_REPEAT,
@@ -914,6 +1003,13 @@ def main() -> int:
     r2_crohme = r2_crohme_field.get("context_role_finalizer") if r2_crohme_field else None
     r7_direct = r7_direct_field.get("distilled_context") if r7_direct_field else None
     r7_crohme = r7_crohme_field.get("distilled_context") if r7_crohme_field else None
+    direct_reference_comparable = all(
+        reference is not None and int(reference.get("all_records", -1)) == len(direct_rows)
+        for reference in (r2_direct, r7_direct)
+    )
+    if not direct_reference_comparable:
+        r2_direct = None
+        r7_direct = None
     metrics = ("all_top1", "strict_micro_top1", "strict_macro_top1", "formula_exact")
     research_gate = (
         all(direct_metrics[key] >= direct_baseline[key] for key in metrics)
@@ -935,7 +1031,12 @@ def main() -> int:
             "candidate_contract": "HWR Top-5 only; no token, deletion, or grouping mutation",
         },
         "data_admission": {
-            "project": "47 ownership-verified formulas / 211 glyphs / three writers",
+            "project": {
+                "ownership_verified_formulas": direct_formula_count,
+                "glyphs": len(direct_rows),
+                "writers": direct_writer_count,
+                "evaluation_partitions": direct_partitions,
+            },
             "synthetic": {
                 "source": "deterministic in-repository formula DSL",
                 "training_examples_per_fit": args.synthetic_train_examples,
@@ -980,6 +1081,11 @@ def main() -> int:
                 "candidate_audit": direct_audit,
                 "r2_reference": r2_direct,
                 "r7_noncommercial_reference": r7_direct,
+                "prior_reference_comparable": direct_reference_comparable,
+                "prior_reference_note": (
+                    "same direct denominator" if direct_reference_comparable
+                    else "omitted because prior reports used a different direct dataset"
+                ),
             },
             "direct_product_refit_resubstitution": {
                 "warning": "training-set fit only; not acceptance evidence",

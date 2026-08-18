@@ -78,3 +78,9 @@ Google BERT-Tiny에 372개 문자 token과 7개 공간관계 token을 추가한 
 직접수집 writer-LOO는 Top-1 89.10%, strict macro 79.40%, 수식 exact 65.96%, 기존 정답 회귀 0건이다. CROHME 개발진단은 각각 77.82%, 52.01%, 27.95%다. 체크포인트 재로딩 불일치는 직접·CROHME 모두 0건이며 상업 학습권리 gate는 통과했다.
 
 다만 직접 47식과 CROHME가 반복 개발에 사용됐고 `/·|·o` 전이 비회귀가 확인되지 않아 자동 기본 교체는 하지 않는다. 현재 상태는 `shadow owned formula-context candidate`이며, 구조·권리 경계·실패 문자·재현 절차는 [research/OWNED_FORMULA_CONTEXT_20260822.md](research/OWNED_FORMULA_CONTEXT_20260822.md)에 기록했다.
+
+### 신규 수집 데이터 적용과 실제 추론 경계
+
+2026-08-19 수집분을 포함한 ownership 96식 중 고정 372-class HWR에 없는 `t`가 든 한 식을 통째로 제외하고 95식·387글자를 감사했다. 기존 r6을 새 수집 48식에 재학습 없이 적용했을 때 HWR Top-1 65.91%가 문맥 확정 후 82.95%, 수식 exact 31.25%가 56.25%로 올랐고 기존 정답 회귀는 0건이었다. 반면 95식으로 다시 학습한 challenger와 사후 결합 규칙은 CROHME 또는 직접 수집에서 회귀해 기각했다.
+
+실제 추론은 [scripts/finalize_formula_context_v1.py](scripts/finalize_formula_context_v1.py)가 담당한다. 정답 `label` 없이 HWR Top-5·확률·수식 순서·공간관계만 받고, 후보 추가·글자 삭제·stroke regrouping 없이 후보 하나를 확정한다. r6은 선택 모델이지만 아직 opt-in shadow 상태다. 새 수집분에는 `|`와 `o` 정답이 없어 상용 정확도 gate는 유지하며, 전체 감사는 [research/OWNED_CONTEXT_ARRIVAL_AUDIT_20260819.md](research/OWNED_CONTEXT_ARRIVAL_AUDIT_20260819.md)에 기록했다.
