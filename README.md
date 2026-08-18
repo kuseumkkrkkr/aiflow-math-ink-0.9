@@ -54,3 +54,11 @@ CROHME2019 CC BY-NC valid 985식에서는 truth-group 문자 Top-1이 56.96%→7
 Google BERT-Tiny에 372개 문자 token과 7개 공간관계 token을 추가한 후보 보존형 재랭커를 구현했다. 프로젝트 ownership 47식만 학습하고 CROHME는 전이 평가에만 사용했다. 직접 writer-LOO Top-1은 73.46%→84.36%, CROHME 지원 문자 Top-1은 69.50%→76.36%였지만, 프로젝트 학습원에 `|·O·o` 정답이 없어 CROHME strict macro가 42.64%→37.69%로 하락했다.
 
 따라서 체크포인트는 shadow component로 생성했으며 기존 372-head의 기본 출력을 자동 교체하지 않았다. 구조·지표·동형문자별 실패와 재현 방법은 [research/MASKED_CONTEXT_BERT_TINY_20260814.md](research/MASKED_CONTEXT_BERT_TINY_20260814.md)에 기록했다.
+
+## 1.0 역할 기반 문맥 최종 확정기
+
+라벨별 MASK 출력 헤드는 프로젝트에 없는 `|·O·o`를 억제하므로 폐기했다. 새 후단은 HWR Top-5의 정확한 문자 형상을 그대로 두고, 고정 BERT-Tiny attention과 프로젝트 수식의 역할 문법으로 `숫자·연산자·구분자·피연산자·기타` 역할만 확정한다. 같은 역할 안에서는 HWR 순위를 바꾸지 않는다.
+
+직접 수집 writer-LOO Top-1은 73.46%→84.83%, strict macro는 57.94%→74.49%, 수식 exact는 34.04%→51.06%였다. CROHME 진단은 Top-1 69.50%→76.14%, strict macro 42.64%→52.34%, 수식 exact 15.85%→24.09%였다. 모든 9,746건에서 원래 Top-5 밖 출력과 grouping 변경은 0건이다.
+
+체크포인트는 재로딩 예측 불일치 0건을 확인했지만 아직 shadow 상태다. CROHME는 반복 개발에 사용된 CC BY-NC 진단셋이며, 상용 기본 승격에는 새 프로젝트 소유 writer/formula acceptance set이 필요하다. 구현·경계·재현 절차는 [research/CONTEXT_ROLE_FINALIZER_20260819.md](research/CONTEXT_ROLE_FINALIZER_20260819.md)에 기록했다.

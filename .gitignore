@@ -19,6 +19,8 @@ artifacts/prefix_48hz_20260814*/
 artifacts/homograph_context_20260814*/
 artifacts/mini_embedding_context_20260814*/
 artifacts/masked_context_bert_tiny_*/
+artifacts/context_decision_layer_*/
+artifacts/context_role_finalizer_*/
 datasets/normalized/
 datasets/30_noncommercial_evaluation/crohme2019/
 __pycache__/

@@ -228,7 +228,7 @@ def _spatial_relation(left: dict, right: dict) -> str:
     return "right" if dx >= 0.0 else "left"
 
 
-def _examples(rows: list[dict], contract: dict) -> list[dict]:
+def _examples(rows: list[dict], contract: dict, context_tokens: dict[str, str] | None = None) -> list[dict]:
     output = []
     label_to_index = contract["label_to_index"]
     for formula_id, sequence in _formulae(rows).items():
@@ -243,7 +243,7 @@ def _examples(rows: list[dict], contract: dict) -> list[dict]:
                     mask_position = len(ids)
                     ids.append(contract["mask_id"])
                 else:
-                    token = row["final_topk"][0]
+                    token = (context_tokens or {}).get(str(row["record_id"]), row["final_topk"][0])
                     if token not in label_to_index:
                         raise ValueError(f"HWR context token outside 372 classes: {token}")
                     ids.append(contract["class_ids"][label_to_index[token]])
@@ -261,8 +261,8 @@ def _examples(rows: list[dict], contract: dict) -> list[dict]:
     return output
 
 
-def _pack(rows: list[dict], contract: dict) -> dict:
-    examples = _examples(rows, contract)
+def _pack(rows: list[dict], contract: dict, context_tokens: dict[str, str] | None = None) -> dict:
+    examples = _examples(rows, contract, context_tokens)
     width = max(len(example["input_ids"]) for example in examples)
     input_ids = torch.full((len(examples), width), int(contract["pad_id"]), dtype=torch.long)
     attention_mask = torch.zeros((len(examples), width), dtype=torch.long)
