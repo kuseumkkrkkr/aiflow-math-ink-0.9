@@ -14,6 +14,8 @@ import torch
 from character_tensor_v1 import _json_lines
 from evaluate_48hz_prefix_v1 import DEFAULT_PRODUCT, _sha256
 from evaluate_homograph_context_reranker_v1 import _metrics
+from semantic_equation_guard_v1 import apply_semantic_equation_guard
+from semantic_fence_guard_v1 import apply_semantic_fence_guard
 import train_masked_context_reranker_v1 as masked
 from train_owned_formula_context_v1 import (
     _assert_candidate_contract,
@@ -22,36 +24,50 @@ from train_owned_formula_context_v1 import (
 )
 
 
-def _scope(rows: list[dict], predictions: dict[str, str]) -> dict:
+def _scope(
+    rows: list[dict], context_predictions: dict[str, str],
+    final_predictions: dict[str, str],
+) -> dict:
     baseline = {str(row["record_id"]): str(row["final_topk"][0]) for row in rows}
-    context_metrics = _metrics(rows, predictions)
+    context_metrics = _metrics(rows, context_predictions)
+    final_metrics = _metrics(rows, final_predictions)
     baseline_metrics = _metrics(rows, baseline)
-    audit = masked._candidate_audit(rows, predictions)
+    audit = masked._candidate_audit(rows, final_predictions)
     _assert_candidate_contract("frozen checkpoint evaluation", audit)
     return {
         "baseline": baseline_metrics,
         "owned_context": context_metrics,
         "delta": masked._metric_delta(context_metrics, baseline_metrics),
+        "semantic_finalizer": final_metrics,
+        "semantic_delta_over_context": masked._metric_delta(
+            final_metrics, context_metrics
+        ),
         "candidate_audit": audit,
     }
 
 
-def _subsets(rows: list[dict], predictions: dict[str, str]) -> dict:
-    output = {"all": _scope(rows, predictions)}
+def _subsets(
+    rows: list[dict], context_predictions: dict[str, str],
+    final_predictions: dict[str, str],
+) -> dict:
+    output = {"all": _scope(rows, context_predictions, final_predictions)}
     by_partition: dict[str, list[dict]] = defaultdict(list)
     by_writer: dict[str, list[dict]] = defaultdict(list)
     for row in rows:
         by_partition[str(row.get("evaluation_partition", "unspecified"))].append(row)
         by_writer[str(row["writer_group"])].append(row)
     for name, subset in sorted(by_partition.items()):
-        output[name] = _scope(subset, predictions)
+        output[name] = _scope(subset, context_predictions, final_predictions)
     arrivals = [
         row for row in rows if str(row.get("evaluation_partition")) != "legacy47"
     ]
     if arrivals:
-        output["new_arrivals"] = _scope(arrivals, predictions)
+        output["new_arrivals"] = _scope(
+            arrivals, context_predictions, final_predictions
+        )
     output["by_writer"] = {
-        writer: _scope(subset, predictions) for writer, subset in sorted(by_writer.items())
+        writer: _scope(subset, context_predictions, final_predictions)
+        for writer, subset in sorted(by_writer.items())
     }
     return output
 
@@ -91,16 +107,27 @@ def main() -> int:
     )
     direct_path = input_root / "direct_candidates.jsonl.gz"
     direct_rows = list(_json_lines(direct_path))
-    direct_predictions, direct_runtime = decide_owned_formula_rows(
+    direct_context, direct_runtime = decide_owned_formula_rows(
         model, contract, payload, direct_rows, device, args.batch_size
+    )
+    direct_equation, direct_equation_audit = apply_semantic_equation_guard(
+        direct_rows, direct_context
+    )
+    direct_predictions, direct_fence_audit = apply_semantic_fence_guard(
+        direct_rows, direct_equation
     )
     if predictions_output is not None:
         predictions_output.parent.mkdir(parents=True, exist_ok=True)
         masked._write_prediction_rows(predictions_output, direct_rows, direct_predictions)
     report = {
-        "schema": "aiflow-owned-formula-context-checkpoint-evaluation/v1",
+        "schema": "aiflow-owned-formula-context-checkpoint-evaluation/v2",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "training_performed": False,
+        "runtime_pipeline": [
+            "owned_formula_context_r6",
+            "semantic_equation_guard_v1",
+            "semantic_fence_guard_v1",
+        ],
         "device": str(device),
         "checkpoint": {"path": str(checkpoint), "sha256": _sha256(checkpoint)},
         "hwr_checkpoint_sha256": _sha256(hwr_checkpoint),
@@ -110,20 +137,38 @@ def main() -> int:
             if predictions_output is not None else None
         ),
         "direct": {
-            "runtime_audit": direct_runtime,
-            "evaluation": _subsets(direct_rows, direct_predictions),
+            "runtime_audit": {
+                "owned_context": direct_runtime,
+                "semantic_equation_guard": direct_equation_audit,
+                "semantic_fence_guard": direct_fence_audit,
+            },
+            "evaluation": _subsets(
+                direct_rows, direct_context, direct_predictions
+            ),
         },
     }
     crohme_path = input_root / "crohme_candidates.jsonl.gz"
     if crohme_path.is_file():
         crohme_rows = list(_json_lines(crohme_path))
-        crohme_predictions, crohme_runtime = decide_owned_formula_rows(
+        crohme_context, crohme_runtime = decide_owned_formula_rows(
             model, contract, payload, crohme_rows, device, args.batch_size
+        )
+        crohme_equation, crohme_equation_audit = apply_semantic_equation_guard(
+            crohme_rows, crohme_context
+        )
+        crohme_predictions, crohme_fence_audit = apply_semantic_fence_guard(
+            crohme_rows, crohme_equation
         )
         report["crohme"] = {
             "candidate_sha256": _sha256(crohme_path),
-            "runtime_audit": crohme_runtime,
-            "evaluation": _scope(crohme_rows, crohme_predictions),
+            "runtime_audit": {
+                "owned_context": crohme_runtime,
+                "semantic_equation_guard": crohme_equation_audit,
+                "semantic_fence_guard": crohme_fence_audit,
+            },
+            "evaluation": _scope(
+                crohme_rows, crohme_context, crohme_predictions
+            ),
         }
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
@@ -133,8 +178,8 @@ def main() -> int:
     direct = report["direct"]["evaluation"]
     print(json.dumps({
         "report": str(output),
-        "all": direct["all"]["owned_context"],
-        "new_arrivals": direct.get("new_arrivals", {}).get("owned_context"),
+        "all": direct["all"]["semantic_finalizer"],
+        "new_arrivals": direct.get("new_arrivals", {}).get("semantic_finalizer"),
         "candidate_preservation": direct["all"]["candidate_audit"]["candidate_preservation_rate"],
     }, ensure_ascii=False))
     return 0

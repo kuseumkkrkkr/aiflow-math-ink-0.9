@@ -81,6 +81,6 @@ Google BERT-Tiny에 372개 문자 token과 7개 공간관계 token을 추가한 
 
 ### 신규 수집 데이터 적용과 실제 추론 경계
 
-2026-08-19 수집분을 포함한 ownership 96식 중 고정 372-class HWR에 없는 `t`가 든 한 식을 통째로 제외하고 95식·387글자를 감사했다. 기존 r6을 새 수집 48식에 재학습 없이 적용했을 때 HWR Top-1 65.91%가 문맥 확정 후 82.95%, 수식 exact 31.25%가 56.25%로 올랐고 기존 정답 회귀는 0건이었다. 반면 95식으로 다시 학습한 challenger와 사후 결합 규칙은 CROHME 또는 직접 수집에서 회귀해 기각했다.
+2026-08-19 수집분을 포함한 ownership 96식 중 고정 372-class HWR에 없는 `t`가 든 한 식을 통째로 제외하고 95식·387글자를 감사했다. 기존 r6을 새 수집 48식에 재학습 없이 적용한 뒤, Top-5 lattice에서 정확한 산술 등식과 누락된 괄호 짝만 복원하는 결정적 의미 가드를 연결했다. HWR Top-1 65.91%는 최종 84.09%, 수식 exact 31.25%는 60.42%로 올랐고 r6 정답 회귀는 0건이었다. 반면 95식 재학습 challenger, 반복 추론, 등호 없는 산술 강제 규칙과 기호를 숫자로 바꾸는 과도한 등식 보정은 효과 부족 또는 안전성 문제로 기각했다.
 
-실제 추론은 [scripts/finalize_formula_context_v1.py](scripts/finalize_formula_context_v1.py)가 담당한다. 정답 `label` 없이 HWR Top-5·확률·수식 순서·공간관계만 받고, 후보 추가·글자 삭제·stroke regrouping 없이 후보 하나를 확정한다. r6은 선택 모델이지만 아직 opt-in shadow 상태다. 새 수집분에는 `|`와 `o` 정답이 없어 상용 정확도 gate는 유지하며, 전체 감사는 [research/OWNED_CONTEXT_ARRIVAL_AUDIT_20260819.md](research/OWNED_CONTEXT_ARRIVAL_AUDIT_20260819.md)에 기록했다.
+실제 추론은 [scripts/finalize_formula_context_v1.py](scripts/finalize_formula_context_v1.py)가 담당한다. 정답 `label` 없이 HWR Top-5·확률·수식 순서·공간관계만 받고, 후보 추가·글자 삭제·stroke regrouping 없이 후보 하나를 확정한다. 산술 어휘 밖 기호가 이미 선택된 식은 등식 보정에서 제외한다. CROHME도 r6 대비 Top-1 77.82%→78.00%, 수식 exact 27.95%→28.46%, 추가 개선/회귀 17/0이었다. r6+의미 가드는 선택 경로지만 아직 opt-in shadow 상태다. 새 수집분에는 `|`와 `o` 정답이 없어 상용 정확도 gate는 유지하며, 전체 감사는 [research/OWNED_CONTEXT_ARRIVAL_AUDIT_20260819.md](research/OWNED_CONTEXT_ARRIVAL_AUDIT_20260819.md)에 기록했다.

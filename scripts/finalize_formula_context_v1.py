@@ -3,7 +3,8 @@
 
 The runtime never receives truth labels and never creates a token, deletes a
 glyph, or changes stroke ownership. Load ``OwnedFormulaContextFinalizer`` once
-per process, then call ``finalize`` for each candidate batch.
+per process, then call ``finalize`` for each candidate batch. The selected r6
+context model is followed by exact-equation and locked-fence semantic guards.
 """
 
 from __future__ import annotations
@@ -18,6 +19,8 @@ import torch
 
 from character_tensor_v1 import _json_lines
 from evaluate_48hz_prefix_v1 import DEFAULT_PRODUCT, _sha256
+from semantic_equation_guard_v1 import apply_semantic_equation_guard
+from semantic_fence_guard_v1 import apply_semantic_fence_guard
 import train_masked_context_reranker_v1 as masked
 from train_owned_formula_context_v1 import (
     decide_owned_formula_rows,
@@ -78,6 +81,7 @@ class OwnedFormulaContextFinalizer:
     def __init__(
         self, checkpoint: Path, hwr_checkpoint: Path = DEFAULT_PRODUCT,
         *, device: str = "auto", batch_size: int = 128,
+        semantic_guards: bool = True,
     ) -> None:
         if batch_size < 1:
             raise ValueError("batch size must be positive")
@@ -91,6 +95,7 @@ class OwnedFormulaContextFinalizer:
             raise ValueError("CUDA requested but unavailable")
         self.device = torch.device(resolved_device)
         self.batch_size = batch_size
+        self.semantic_guards = semantic_guards
         self.checkpoint_sha256 = _sha256(checkpoint)
         self.hwr_checkpoint_sha256 = _sha256(hwr_checkpoint)
         self.model, self.contract, self.payload = load_owned_formula_context(
@@ -100,10 +105,25 @@ class OwnedFormulaContextFinalizer:
 
     def finalize(self, rows: list[dict]) -> tuple[list[dict], dict]:
         runtime_rows = _runtime_rows(rows, self.labels)
-        predictions, model_audit = decide_owned_formula_rows(
+        context_predictions, model_audit = decide_owned_formula_rows(
             self.model, self.contract, self.payload, runtime_rows,
             self.device, self.batch_size,
         )
+        if self.semantic_guards:
+            equation_predictions, equation_audit = apply_semantic_equation_guard(
+                runtime_rows, context_predictions
+            )
+            predictions, fence_audit = apply_semantic_fence_guard(
+                runtime_rows, equation_predictions
+            )
+            semantic_audit = {
+                "enabled": True,
+                "equation": equation_audit,
+                "fence": fence_audit,
+            }
+        else:
+            predictions = context_predictions
+            semantic_audit = {"enabled": False}
         output = []
         for row in runtime_rows:
             record_id = str(row["record_id"])
@@ -111,7 +131,7 @@ class OwnedFormulaContextFinalizer:
             if prediction not in row["final_topk"]:
                 raise AssertionError("context finalizer invented a candidate")
             output.append({
-                "schema": "aiflow-formula-context-finalized/v1",
+                "schema": "aiflow-formula-context-finalized/v2",
                 "record_id": record_id,
                 "formula_id": str(row["formula_id"]),
                 "context_index": int(row["context"]["index"]),
@@ -124,6 +144,10 @@ class OwnedFormulaContextFinalizer:
         return output, {
             "context_checkpoint_sha256": self.checkpoint_sha256,
             "hwr_checkpoint_sha256": self.hwr_checkpoint_sha256,
+            "pipeline": ["owned_formula_context_r6"] + (
+                ["semantic_equation_guard_v1", "semantic_fence_guard_v1"]
+                if self.semantic_guards else []
+            ),
             "records": len(output),
             "formulas": len({row["formula_id"] for row in output}),
             "changed": sum(bool(row["changed"]) for row in output),
@@ -132,6 +156,7 @@ class OwnedFormulaContextFinalizer:
             "deleted_glyphs": 0,
             "grouping_mutations": 0,
             "model": model_audit,
+            "semantic_guards": semantic_audit,
         }
 
 
@@ -171,6 +196,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--batch-size", type=int, default=128)
+    parser.add_argument("--disable-semantic-guards", action="store_true")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
     if args.self_test:
@@ -186,6 +212,7 @@ def main() -> int:
     finalizer = OwnedFormulaContextFinalizer(
         args.checkpoint, args.hwr_checkpoint,
         device=args.device, batch_size=args.batch_size,
+        semantic_guards=not args.disable_semantic_guards,
     )
     finalized, audit = finalizer.finalize(list(_json_lines(input_path)))
     output_path.parent.mkdir(parents=True, exist_ok=True)
