@@ -289,8 +289,16 @@ def _paired_fence_rows(rows: list[dict]) -> set[str]:
     return paired
 
 
-def _role_components(model, contract: dict, rows: list[dict], grammar: dict, device: torch.device, batch_size: int) -> dict:
-    packed_rows, candidate_logits, candidate_mask = _bert_candidate_logits(model, contract, rows, device, batch_size)
+def _assemble_role_components(
+    packed_rows: list[dict],
+    candidate_logits: np.ndarray,
+    candidate_mask: np.ndarray,
+    rows: list[dict],
+    grammar: dict,
+    role_context_scores: np.ndarray | None = None,
+) -> dict:
+    if role_context_scores is not None and role_context_scores.shape != (len(packed_rows), len(ROLES)):
+        raise ValueError("role-context score shape mismatch")
     record_to_index = {str(row["record_id"]): index for index, row in enumerate(packed_rows)}
     grammar_by_record: dict[str, list[float]] = {}
     for sequence in masked._formulae(rows).values():
@@ -323,7 +331,11 @@ def _role_components(model, contract: dict, rows: list[dict], grammar: dict, dev
                 continue
             role_mask[row_index, role_index] = True
             role_choices[row_index, role_index] = candidate_positions[0]
-            context_scores[row_index, role_index] = max(float(candidate_logits[row_index, index]) for index in candidate_positions)
+            context_scores[row_index, role_index] = (
+                float(role_context_scores[row_index, role_index])
+                if role_context_scores is not None
+                else max(float(candidate_logits[row_index, index]) for index in candidate_positions)
+            )
             shape_scores[row_index, role_index] = math.log(sum(float(probabilities[index]) for index in candidate_positions) + 1e-12)
             grammar_scores[row_index, role_index] = grammar_by_record[str(row["record_id"])][role_index]
     if set(record_to_index) != set(grammar_by_record):
@@ -341,6 +353,13 @@ def _role_components(model, contract: dict, rows: list[dict], grammar: dict, dev
         "candidate_context": _normalize_rows(candidate_logits, candidate_mask),
         "candidate_shape": candidate_shape,
     }
+
+
+def _role_components(model, contract: dict, rows: list[dict], grammar: dict, device: torch.device, batch_size: int) -> dict:
+    packed_rows, candidate_logits, candidate_mask = _bert_candidate_logits(model, contract, rows, device, batch_size)
+    return _assemble_role_components(
+        packed_rows, candidate_logits, candidate_mask, rows, grammar
+    )
 
 
 def _configuration_grid() -> list[dict | None]:
@@ -450,6 +469,24 @@ def _predict(
         predictions[record_id] = prediction
         role_switches += _semantic_role(prediction) != _semantic_role(str(row["final_topk"][0]))
     binary_times_forced = _force_binary_times(rows, predictions)
+    probability_floor_reverts = 0
+    probability_ratio_floor = float(
+        configuration.get("candidate_probability_ratio_floor", 0.0)
+    )
+    if probability_ratio_floor > 0.0:
+        for row in rows:
+            record_id = str(row["record_id"])
+            prediction = predictions[record_id]
+            if prediction == str(row["final_topk"][0]):
+                continue
+            candidate_index = row["final_topk"].index(prediction)
+            probabilities = row["final_topk_probabilities"]
+            ratio = float(probabilities[candidate_index]) / max(
+                float(probabilities[0]), 1e-12
+            )
+            if ratio < probability_ratio_floor:
+                predictions[record_id] = str(row["final_topk"][0])
+                probability_floor_reverts += 1
     role_switches = sum(
         _semantic_role(predictions[str(row["record_id"])])
         != _semantic_role(str(row["final_topk"][0]))
@@ -463,6 +500,8 @@ def _predict(
         "fence_forced": fence_forced,
         "trusted_top1_rows": trusted_top1_rows,
         "rare_margin_kept": rare_margin_kept,
+        "candidate_probability_ratio_floor": probability_ratio_floor,
+        "probability_floor_reverts": probability_floor_reverts,
         "abstained": False,
     }
 

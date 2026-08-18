@@ -22,6 +22,7 @@ artifacts/masked_context_bert_tiny_*/
 artifacts/context_decision_layer_*/
 artifacts/context_role_finalizer_*/
 artifacts/distilled_math_context_*/
+artifacts/owned_formula_context_*/
 artifacts/hf_model_audit/
 datasets/normalized/
 datasets/30_noncommercial_evaluation/crohme2019/

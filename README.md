@@ -70,3 +70,11 @@ Google BERT-Tiny에 372개 문자 token과 7개 공간관계 token을 추가한 
 직접 수집 writer-LOO Top-1은 88.63%, strict macro는 75.74%, 수식 exact는 68.09%였다. CROHME 진단은 각각 78.69%, 57.68%, 27.44%였다. 이는 기존 역할 기반 r2의 대응 지표를 모두 상회하며, 후보 이탈과 grouping 변경은 9,746건 전체에서 0건이다.
 
 연구 gate는 통과했지만 자동 기본 교체는 보류한다. MathBERTa 학습원인 ArXMLiv·Math StackExchange의 상용 권리 감사도 통과하지 못했고, CROHME는 반복 관찰된 CC BY-NC 진단셋이며 `/·o`는 여전히 약하다. 새 프로젝트 소유 writer/formula acceptance와 상업 이용이 명확한 교사 교체가 모두 필요하다. 구조·모델 감사·재현 절차는 [research/DISTILLED_MATH_CONTEXT_20260819.md](research/DISTILLED_MATH_CONTEXT_20260819.md)에 기록했다.
+
+## 1.0 자체 수식 문맥 확정 레이어
+
+외부 사전학습 가중치와 외부 텍스트 말뭉치를 제거하고, 무작위 초기화 2-layer Transformer를 프로젝트 소유 47식과 저장소 내 결정적 수식 DSL만으로 학습했다. 실행 시 HWR Top-5와 7개 공간관계만 읽고 기존 후보 중 하나를 확정하며, 새 token·삭제·stroke regrouping은 허용하지 않는다.
+
+직접수집 writer-LOO는 Top-1 89.10%, strict macro 79.40%, 수식 exact 65.96%, 기존 정답 회귀 0건이다. CROHME 개발진단은 각각 77.82%, 52.01%, 27.95%다. 체크포인트 재로딩 불일치는 직접·CROHME 모두 0건이며 상업 학습권리 gate는 통과했다.
+
+다만 직접 47식과 CROHME가 반복 개발에 사용됐고 `/·|·o` 전이 비회귀가 확인되지 않아 자동 기본 교체는 하지 않는다. 현재 상태는 `shadow owned formula-context candidate`이며, 구조·권리 경계·실패 문자·재현 절차는 [research/OWNED_FORMULA_CONTEXT_20260822.md](research/OWNED_FORMULA_CONTEXT_20260822.md)에 기록했다.
