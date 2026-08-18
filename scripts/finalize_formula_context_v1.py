@@ -4,7 +4,7 @@
 The runtime never receives truth labels and never creates a token, deletes a
 glyph, or changes stroke ownership. Load ``OwnedFormulaContextFinalizer`` once
 per process, then call ``finalize`` for each candidate batch. The selected r6
-context model is followed by exact-equation and locked-fence semantic guards.
+context model is followed by equation, locked-fence, and horizontal-infix guards.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from character_tensor_v1 import _json_lines
 from evaluate_48hz_prefix_v1 import DEFAULT_PRODUCT, _sha256
 from semantic_equation_guard_v1 import apply_semantic_equation_guard
 from semantic_fence_guard_v1 import apply_semantic_fence_guard
+from semantic_infix_guard_v1 import apply_semantic_infix_guard
 import train_masked_context_reranker_v1 as masked
 from train_owned_formula_context_v1 import (
     decide_owned_formula_rows,
@@ -113,13 +114,18 @@ class OwnedFormulaContextFinalizer:
             equation_predictions, equation_audit = apply_semantic_equation_guard(
                 runtime_rows, context_predictions
             )
-            predictions, fence_audit = apply_semantic_fence_guard(
+            fence_predictions, fence_audit = apply_semantic_fence_guard(
                 runtime_rows, equation_predictions
+            )
+            predictions, infix_audit = apply_semantic_infix_guard(
+                runtime_rows, fence_predictions,
+                float(self.payload["configuration"]["candidate_probability_ratio_floor"]),
             )
             semantic_audit = {
                 "enabled": True,
                 "equation": equation_audit,
                 "fence": fence_audit,
+                "infix": infix_audit,
             }
         else:
             predictions = context_predictions
@@ -131,7 +137,7 @@ class OwnedFormulaContextFinalizer:
             if prediction not in row["final_topk"]:
                 raise AssertionError("context finalizer invented a candidate")
             output.append({
-                "schema": "aiflow-formula-context-finalized/v2",
+                "schema": "aiflow-formula-context-finalized/v3",
                 "record_id": record_id,
                 "formula_id": str(row["formula_id"]),
                 "context_index": int(row["context"]["index"]),
@@ -145,7 +151,11 @@ class OwnedFormulaContextFinalizer:
             "context_checkpoint_sha256": self.checkpoint_sha256,
             "hwr_checkpoint_sha256": self.hwr_checkpoint_sha256,
             "pipeline": ["owned_formula_context_r6"] + (
-                ["semantic_equation_guard_v1", "semantic_fence_guard_v1"]
+                [
+                    "semantic_equation_guard_v1",
+                    "semantic_fence_guard_v1",
+                    "semantic_infix_guard_v1",
+                ]
                 if self.semantic_guards else []
             ),
             "records": len(output),
