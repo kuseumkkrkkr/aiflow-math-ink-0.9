@@ -62,3 +62,11 @@ Google BERT-Tiny에 372개 문자 token과 7개 공간관계 token을 추가한 
 직접 수집 writer-LOO Top-1은 73.46%→84.83%, strict macro는 57.94%→74.49%, 수식 exact는 34.04%→51.06%였다. CROHME 진단은 Top-1 69.50%→76.14%, strict macro 42.64%→52.34%, 수식 exact 15.85%→24.09%였다. 모든 9,746건에서 원래 Top-5 밖 출력과 grouping 변경은 0건이다.
 
 체크포인트는 재로딩 예측 불일치 0건을 확인했지만 아직 shadow 상태다. CROHME는 반복 개발에 사용된 CC BY-NC 진단셋이며, 상용 기본 승격에는 새 프로젝트 소유 writer/formula acceptance set이 필요하다. 구현·경계·재현 절차는 [research/CONTEXT_ROLE_FINALIZER_20260819.md](research/CONTEXT_ROLE_FINALIZER_20260819.md)에 기록했다.
+
+## 1.0 증류형 수학 문맥 최종 확정기
+
+모델 저장소가 MIT로 표시된 MathBERTa를 연구용 학습 교사로 사용해 372-class 문맥 분포를 만들고, 이를 경량 Google BERT-Tiny에 증류했다. 실행 시에는 586MB 교사가 필요하지 않으며 33.8MB 학생 체크포인트만 사용한다. 출력은 항상 HWR Top-5 안에서만 선택하고 stroke grouping은 바꾸지 않는다.
+
+직접 수집 writer-LOO Top-1은 88.63%, strict macro는 75.74%, 수식 exact는 68.09%였다. CROHME 진단은 각각 78.69%, 57.68%, 27.44%였다. 이는 기존 역할 기반 r2의 대응 지표를 모두 상회하며, 후보 이탈과 grouping 변경은 9,746건 전체에서 0건이다.
+
+연구 gate는 통과했지만 자동 기본 교체는 보류한다. MathBERTa 학습원인 ArXMLiv·Math StackExchange의 상용 권리 감사도 통과하지 못했고, CROHME는 반복 관찰된 CC BY-NC 진단셋이며 `/·o`는 여전히 약하다. 새 프로젝트 소유 writer/formula acceptance와 상업 이용이 명확한 교사 교체가 모두 필요하다. 구조·모델 감사·재현 절차는 [research/DISTILLED_MATH_CONTEXT_20260819.md](research/DISTILLED_MATH_CONTEXT_20260819.md)에 기록했다.

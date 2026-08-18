@@ -17,7 +17,7 @@
 
 따라서 `0·O·o`, `x·\times`, `1·|·/`의 의미 역할은 문맥이 다루되, 같은 역할 안의 대소문자·정확한 형상은 HWR이 소유한다. 새 token 생성, token 삭제, stroke regrouping은 불가능하다.
 
-구현: `scripts/train_context_decision_layer_v1.py`
+구현 당시 코드: commit `10a5f8e`의 `scripts/train_context_decision_layer_v1.py`. 현재 같은 파일은 증류형 후속 실험을 위해 schema v2로 확장됐으므로 아래 r2 산출물과 수치는 역사적 기준선으로 보존한다.
 
 ## 데이터 경계
 
@@ -96,3 +96,7 @@ python scripts\train_context_decision_layer_v1.py --device cuda --output artifac
 - `automatic_default_replacement=false`
 
 다음 승격 조건은 새 프로젝트 소유 writer/formula에서 `|·/·o` 비회귀, 수식 grouping, LaTeX-equivalent exact를 함께 통과하는 것이다.
+
+## 후속 결과
+
+이 r2는 연구 기준선으로 보존한다. MathBERTa 교사를 BERT-Tiny에 증류한 r7이 직접 writer-LOO와 CROHME의 Top-1·strict micro·strict macro·수식 exact를 모두 상회했다. 후속 구조와 승격 경계는 [DISTILLED_MATH_CONTEXT_20260819.md](DISTILLED_MATH_CONTEXT_20260819.md)에 기록했다.
