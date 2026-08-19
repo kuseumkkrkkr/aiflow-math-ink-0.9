@@ -59,7 +59,10 @@ REQUIRED = {
     "geometry",
 }
 SEQUENCE_CONFIG_SCHEMA = "aiflow-formula-sequence-guard-runtime-config/v1"
-SYNTAX_RESCUE_CONFIG_SCHEMA = "aiflow-formula-syntax-rescue-runtime-config/v1"
+SYNTAX_RESCUE_CONFIG_SCHEMAS = frozenset({
+    "aiflow-formula-syntax-rescue-runtime-config/v1",
+    "aiflow-formula-syntax-rescue-runtime-config/v2",
+})
 
 
 def _runtime_rows(
@@ -224,7 +227,7 @@ class OwnedFormulaContextFinalizer:
                 raise FileNotFoundError(f"formula syntax rescue config is missing: {rescue_path}")
             rescue_payload = json.loads(rescue_path.read_text(encoding="utf-8"))
             if (
-                rescue_payload.get("schema") != SYNTAX_RESCUE_CONFIG_SCHEMA
+                rescue_payload.get("schema") not in SYNTAX_RESCUE_CONFIG_SCHEMAS
                 or rescue_payload.get("checkpoint_sha256") != self.checkpoint_sha256
                 or rescue_payload.get("hwr_checkpoint_sha256") != self.hwr_checkpoint_sha256
                 or rescue_payload.get("gate", {}).get("runtime_admitted") is not True

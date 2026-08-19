@@ -12,7 +12,7 @@ from formula_sequence_guard_v1 import (
 )
 
 
-SCHEMA = "aiflow-formula-syntax-rescue/v1"
+SCHEMA = "aiflow-formula-syntax-rescue/v2"
 EQUALITY_EVIDENCE = frozenset({
     "=", r"\approx", r"\asymp", r"\cong", r"\doteq", r"\equiv",
     r"\neq", r"\sim", r"\simeq",
@@ -24,21 +24,68 @@ DEFAULT_CONFIGURATION = {
     "retention_bonus": 0.25,
     "margin": 0.5,
     "minimum_candidate_probability_ratio": 0.0005,
+    "horizontal_dash_enabled": True,
+    "horizontal_dash_aspect_log_min": 0.5,
+    "horizontal_dash_abs_slope_max": 0.6,
 }
+LEGACY_CONFIGURATION_FIELDS = frozenset({
+    "shape_weight", "context_weight", "grammar_weight", "retention_bonus",
+    "margin", "minimum_candidate_probability_ratio",
+})
 
 
 def validate_configuration(configuration: dict) -> dict:
-    if set(configuration) != set(DEFAULT_CONFIGURATION):
+    fields = set(configuration)
+    if fields == LEGACY_CONFIGURATION_FIELDS:
+        configuration = {
+            **configuration,
+            "horizontal_dash_enabled": False,
+            "horizontal_dash_aspect_log_min": 0.5,
+            "horizontal_dash_abs_slope_max": 0.6,
+        }
+    elif fields != set(DEFAULT_CONFIGURATION):
         raise ValueError("formula syntax rescue configuration fields mismatch")
     output = {}
     for key in DEFAULT_CONFIGURATION:
+        if key == "horizontal_dash_enabled":
+            if type(configuration[key]) is not bool:
+                raise ValueError("formula syntax rescue horizontal dash flag must be boolean")
+            output[key] = configuration[key]
+            continue
         value = float(configuration[key])
         if not math.isfinite(value) or value < 0.0:
             raise ValueError(f"invalid formula syntax rescue configuration: {key}")
         output[key] = value
     if output["minimum_candidate_probability_ratio"] > 1.0:
         raise ValueError("formula syntax rescue probability ratio must not exceed one")
+    if output["horizontal_dash_abs_slope_max"] > 1.0:
+        raise ValueError("horizontal dash absolute slope must not exceed one")
     return output
+
+
+def _horizontal_dash_evidence(
+    row: dict, before: str, after: str, configuration: dict,
+) -> dict | None:
+    if not configuration["horizontal_dash_enabled"] or before != "/" or after != "-":
+        return None
+    geometry = row.get("geometry") or {}
+    try:
+        aspect_log = float(geometry["aspect_log"])
+        direction_x = float(geometry["direction_x"])
+        direction_y = float(geometry["direction_y"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not all(math.isfinite(value) for value in (aspect_log, direction_x, direction_y)):
+        return None
+    if abs(direction_x) < 1e-12:
+        return None
+    absolute_slope = abs(direction_y) / abs(direction_x)
+    if (
+        aspect_log < configuration["horizontal_dash_aspect_log_min"]
+        or absolute_slope > configuration["horizontal_dash_abs_slope_max"]
+    ):
+        return None
+    return {"aspect_log": aspect_log, "absolute_slope": absolute_slope}
 
 
 def _allowed_change(
@@ -61,7 +108,7 @@ def apply_formula_syntax_rescue(
     rows: list[dict], predictions: dict[str, str], components: dict,
     grammar: dict, configuration: dict | None = None,
 ) -> tuple[dict[str, str], dict]:
-    """Repair one missing structural token in an otherwise valid numeric row."""
+    """Repair one geometry- or syntax-supported token without solving arithmetic."""
     configuration = validate_configuration(configuration or DEFAULT_CONFIGURATION)
     record_ids = {str(row["record_id"]) for row in rows}
     if set(predictions) != record_ids:
@@ -84,6 +131,40 @@ def apply_formula_syntax_rescue(
     skipped = Counter()
     for formula_id, sequence in masked._formulae(rows).items():
         baseline = [output[str(row["record_id"])] for row in sequence]
+        geometry_changes = []
+        for index, row in enumerate(sequence):
+            if index == 0 or index + 1 == len(sequence):
+                continue
+            candidates = [str(value) for value in row["final_topk"]]
+            if "-" not in candidates:
+                continue
+            evidence = _horizontal_dash_evidence(
+                row, baseline[index], "-", configuration,
+            )
+            if evidence is None:
+                continue
+            probabilities = [float(value) for value in row["final_topk_probabilities"]]
+            probability_ratio = probabilities[candidates.index("-")] / max(
+                probabilities[candidates.index(baseline[index])], 1e-12,
+            )
+            if probability_ratio >= configuration["minimum_candidate_probability_ratio"]:
+                geometry_changes.append((index, probability_ratio, evidence))
+        if len(geometry_changes) > 1:
+            skipped["ambiguous_horizontal_dash"] += 1
+            continue
+        if geometry_changes:
+            index, probability_ratio, evidence = geometry_changes[0]
+            record_id = str(sequence[index]["record_id"])
+            output[record_id] = "-"
+            changes.append({
+                "formula_id": str(formula_id), "record_id": record_id,
+                "before": baseline[index], "after": "-",
+                "rule": "horizontal_slash_to_dash",
+                "score_margin": None,
+                "candidate_probability_ratio": probability_ratio,
+                **evidence,
+            })
+            continue
         if not valid_numeric_sequence(baseline):
             skipped["not_valid_numeric_baseline"] += 1
             continue
@@ -190,6 +271,42 @@ def _self_test() -> None:
     rescued, audit = apply_formula_syntax_rescue(rows, baseline, components, grammar)
     assert [rescued[f"r{index}"] for index in range(3)] == ["5", "+", "4"]
     assert audit["changed"] == 1
+
+    legacy = {
+        key: value for key, value in DEFAULT_CONFIGURATION.items()
+        if key in LEGACY_CONFIGURATION_FIELDS
+    }
+    assert validate_configuration(legacy)["horizontal_dash_enabled"] is False
+
+    dash_rows = []
+    for index, candidates in enumerate((["5"], ["/", "-"], ["0"])):
+        dash_rows.append({
+            "record_id": f"d{index}", "formula_id": "dash",
+            "label": ("5", "-", "0")[index],
+            "final_topk": list(candidates),
+            "final_topk_probabilities": (
+                [1.0] if len(candidates) == 1 else [0.8, 0.2]
+            ),
+            "context": {"index": index, "length": 3},
+            "geometry": (
+                {"aspect_log": 0.6, "direction_x": 1.0, "direction_y": 0.4}
+                if index == 1 else {}
+            ),
+        })
+    dash_scores = np.zeros((3, 2), dtype=np.float32)
+    dash_components = {"rows": dash_rows, "candidate_context": dash_scores}
+    dash_predictions = {"d0": "5", "d1": "/", "d2": "0"}
+    dash_grammar = context._fit_role_grammar(dash_rows)
+    rescued, audit = apply_formula_syntax_rescue(
+        dash_rows, dash_predictions, dash_components, dash_grammar,
+    )
+    assert [rescued[f"d{index}"] for index in range(3)] == ["5", "-", "0"]
+    assert audit["changes"][0]["rule"] == "horizontal_slash_to_dash"
+    dash_rows[1]["geometry"]["direction_y"] = 0.8
+    preserved, _ = apply_formula_syntax_rescue(
+        dash_rows, dash_predictions, dash_components, dash_grammar,
+    )
+    assert preserved == dash_predictions
 
     rows[1]["final_topk"] = ["4", "="]
     rows[1]["final_topk_probabilities"] = [0.8, 0.2]

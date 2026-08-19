@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -17,19 +18,73 @@ from finalize_formula_context_v1 import (
 from formula_layout_v1 import recontextualize_formula_rows
 from formula_syntax_rescue_v1 import (
     DEFAULT_CONFIGURATION, SCHEMA as RESCUE_SCHEMA,
-    _self_test as rescue_self_test, apply_formula_syntax_rescue,
+    _horizontal_dash_evidence, _self_test as rescue_self_test,
+    apply_formula_syntax_rescue, validate_configuration,
 )
+import train_masked_context_reranker_v1 as masked
 from train_owned_formula_context_v1 import _components
 
 
-SCHEMA = "aiflow-formula-syntax-rescue-evaluation/v1"
-CONFIG_SCHEMA = "aiflow-formula-syntax-rescue-runtime-config/v1"
+SCHEMA = "aiflow-formula-syntax-rescue-evaluation/v2"
+CONFIG_SCHEMA = "aiflow-formula-syntax-rescue-runtime-config/v2"
 
 
 def _predictions(path: Path) -> dict[str, str]:
     return {
         str(row["record_id"]): str(row["finalized_top1"])
         for row in _json_lines(path)
+    }
+
+
+def _horizontal_dash_diagnostic(
+    rows: list[dict], predictions: dict[str, str], configuration: dict,
+) -> dict:
+    configuration = validate_configuration(configuration)
+    eligible = []
+    outcomes = Counter()
+    truth_distribution = Counter()
+    for formula_id, sequence in masked._formulae(rows).items():
+        for index, row in enumerate(sequence):
+            if index == 0 or index + 1 == len(sequence):
+                continue
+            record_id = str(row["record_id"])
+            candidates = [str(value) for value in row["final_topk"]]
+            before = str(predictions[record_id])
+            if before != "/" or "-" not in candidates:
+                continue
+            truth = str(row["label"])
+            truth_distribution[truth] += 1
+            probabilities = [float(value) for value in row["final_topk_probabilities"]]
+            probability_ratio = probabilities[candidates.index("-")] / max(
+                probabilities[candidates.index(before)], 1e-12,
+            )
+            evidence = _horizontal_dash_evidence(
+                row, before, "-", configuration,
+            )
+            selected = bool(
+                evidence is not None
+                and probability_ratio >= configuration["minimum_candidate_probability_ratio"]
+            )
+            outcome = "not_selected"
+            if selected:
+                outcome = (
+                    "improved" if truth == "-"
+                    else "regressed" if truth == "/"
+                    else "neutral"
+                )
+            outcomes[outcome] += 1
+            eligible.append({
+                "formula_id": str(formula_id), "record_id": record_id,
+                "truth": truth, "selected": selected, "outcome": outcome,
+                "candidate_probability_ratio": probability_ratio,
+                "geometry": evidence,
+            })
+    return {
+        "eligible": len(eligible),
+        "selected": sum(bool(row["selected"]) for row in eligible),
+        "truth_distribution": dict(sorted(truth_distribution.items())),
+        "outcomes": dict(sorted(outcomes.items())),
+        "rows": eligible,
     }
 
 
@@ -81,6 +136,9 @@ def _evaluate(
         },
         "evaluation": _scope(evaluation_rows, baseline, challenger),
         "audit": {**audit, "changes": changed_outcomes},
+        "horizontal_dash_diagnostic": _horizontal_dash_diagnostic(
+            evaluation_rows, baseline, DEFAULT_CONFIGURATION,
+        ),
         "glyph_improved": glyph_improved,
         "glyph_regressed": glyph_regressed,
         "layout_audit": layout_audit,
