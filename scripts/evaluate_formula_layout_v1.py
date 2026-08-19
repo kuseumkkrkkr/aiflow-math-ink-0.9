@@ -117,11 +117,17 @@ def _order_metrics(
     }
 
 
-def _flat_structure_gate(rows: list[dict], script_predictor=None) -> dict:
+def _flat_structure_gate(
+    rows: list[dict], script_predictor=None,
+    relation_formula_ids: frozenset[str] = frozenset(),
+) -> dict:
     """Require no invented structure in the accepted direct flat corpus."""
     edges = 0
     affected = []
-    for formula_id, sequence in _grouped(rows).items():
+    grouped = _grouped(rows)
+    for formula_id, sequence in grouped.items():
+        if formula_id in relation_formula_ids:
+            continue
         layout = infer_formula_layout(sequence, script_predictor=script_predictor)
         structural = [edge for edge in layout["edges"] if edge["type"] in STRUCTURAL]
         edges += len(structural)
@@ -145,9 +151,100 @@ def _flat_structure_gate(rows: list[dict], script_predictor=None) -> dict:
     return {
         "expected": "zero structural edges in accepted direct flat formulas",
         "passed": edges == 0,
+        "formulas": len(grouped) - len(set(grouped) & relation_formula_ids),
+        "excluded_relation_formulas": sorted(set(grouped) & relation_formula_ids),
         "false_positive_edges": edges,
         "affected_formulas": len(affected),
         "failures": affected[:25],
+    }
+
+
+def _owned_relation_acceptance(path: Path | None) -> dict | None:
+    if path is None:
+        return None
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if payload.get("schema") != "aiflow-owned-formula-relation-acceptance/v1":
+        raise ValueError("owned relation acceptance schema mismatch")
+    formulas = payload.get("formulas") or []
+    if not formulas or len({str(row["formula_id"]) for row in formulas}) != len(formulas):
+        raise ValueError("owned relation acceptance formulas must be non-empty and unique")
+    return payload
+
+
+def _indexed_truth(formula: dict, rows: list[dict]) -> set[tuple[str, str, str]]:
+    ordered = sorted(rows, key=lambda row: int(row["context"]["index"]))
+    if [int(row["context"]["index"]) for row in ordered] != list(range(len(ordered))):
+        raise ValueError(f"owned relation indices are not contiguous: {formula['formula_id']}")
+    identifiers = [str(row["record_id"]) for row in ordered]
+    truth = set()
+    for edge in formula["truth_relations"]:
+        parent, child = int(edge["parent_index"]), int(edge["child_index"])
+        if not (0 <= parent < len(identifiers) and 0 <= child < len(identifiers)):
+            raise ValueError(f"owned relation truth index out of range: {formula['formula_id']}")
+        truth.add((identifiers[parent], identifiers[child], str(edge["type"])))
+    return truth
+
+
+def _owned_relation_metrics(
+    acceptance: dict, rows_by_formula: dict[str, list[dict]] | None = None,
+    predictions: dict[str, str] | None = None, script_predictor=None,
+) -> dict:
+    totals = Counter(tp=0, fp=0, fn=0)
+    exact = hwr_exact = final_exact = strict_exact = 0
+    failures = []
+    evaluated = 0
+    for formula in acceptance["formulas"]:
+        formula_id = str(formula["formula_id"])
+        rows = (
+            formula["rows"] if rows_by_formula is None
+            else rows_by_formula.get(formula_id)
+        )
+        if rows is None:
+            continue
+        truth = _indexed_truth(formula, rows)
+        predicted = {
+            (str(edge["parent"]), str(edge["child"]), str(edge["type"]))
+            for edge in infer_formula_layout(rows, script_predictor=script_predictor)["edges"]
+            if edge["type"] in STRUCTURAL
+        }
+        relation_ok = predicted == truth
+        top1_ok = all(str(row["final_topk"][0]) == str(row["label"]) for row in rows)
+        finalized_ok = bool(predictions) and all(
+            predictions.get(str(row["record_id"])) == str(row["label"])
+            for row in rows
+        )
+        tp, fp, fn = len(predicted & truth), len(predicted - truth), len(truth - predicted)
+        totals.update(tp=tp, fp=fp, fn=fn)
+        evaluated += 1
+        exact += relation_ok
+        hwr_exact += top1_ok
+        final_exact += finalized_ok
+        strict_exact += relation_ok and finalized_ok
+        if not relation_ok and len(failures) < 25:
+            failures.append({
+                "formula_id": formula_id,
+                "truth": sorted(truth), "predicted": sorted(predicted),
+            })
+    precision = totals["tp"] / max(totals["tp"] + totals["fp"], 1)
+    recall = totals["tp"] / max(totals["tp"] + totals["fn"], 1)
+    return {
+        "declared_formulas": len(acceptance["formulas"]),
+        "evaluated_formulas": evaluated,
+        "formula_exact_count": exact,
+        "formula_exact": exact / max(evaluated, 1),
+        "micro": {
+            **dict(totals), "precision": precision, "recall": recall,
+            "f1": 2 * precision * recall / max(precision + recall, 1e-12),
+        },
+        "character_model_evaluated": rows_by_formula is not None,
+        "character_formula_exact": {
+            "hwr_top1_count": hwr_exact,
+            "context_finalized_count": final_exact if predictions else None,
+        } if rows_by_formula is not None else None,
+        "relation_and_character_formula_exact_count": (
+            strict_exact if predictions and rows_by_formula is not None else None
+        ),
+        "failures": failures,
     }
 
 
@@ -402,6 +499,13 @@ def _self_test() -> None:
     assert metrics["layout_order_exact"] == 1.0
     assert metrics["layout_and_character_formula_exact"]["context_finalized"] == 1.0
     assert _flat_structure_gate(rows)["passed"]
+    acceptance = {
+        "formulas": [{
+            "formula_id": "f", "rows": rows,
+            "truth_relations": [],
+        }],
+    }
+    assert _owned_relation_metrics(acceptance)["formula_exact_count"] == 1
 
 
 def main() -> int:
@@ -413,6 +517,7 @@ def main() -> int:
     parser.add_argument("--crohme-baseline-finalized", type=Path)
     parser.add_argument("--crohme-root", type=Path)
     parser.add_argument("--script-layout-checkpoint", type=Path)
+    parser.add_argument("--owned-relation-acceptance", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
@@ -430,6 +535,10 @@ def main() -> int:
     )
     if finalized and set(finalized) != {str(row["record_id"]) for row in direct}:
         raise ValueError("direct finalized prediction coverage mismatch")
+    acceptance = _owned_relation_acceptance(args.owned_relation_acceptance)
+    relation_formula_ids = frozenset(
+        str(row["formula_id"]) for row in (acceptance or {}).get("formulas", [])
+    )
     report = {
         "schema": SCHEMA, "generated_at": datetime.now(timezone.utc).isoformat(),
         "layer": {
@@ -439,12 +548,26 @@ def main() -> int:
         },
         "direct": {
             "metrics": _order_metrics(direct, finalized, script_predictor),
-            "flat_structure_gate": _flat_structure_gate(direct, script_predictor),
+            "flat_structure_gate": _flat_structure_gate(
+                direct, script_predictor, relation_formula_ids,
+            ),
             "candidates_sha256": _sha256(args.direct_candidates),
             "finalized_sha256": _sha256(args.direct_finalized) if args.direct_finalized else None,
-            "interpretation": "accepted ownership order is evaluation truth only and is not read by the layout layer",
+            "interpretation": "accepted ownership order and explicit relation overlay are evaluation truth only and are not read by the layout layer",
         },
     }
+    if acceptance is not None:
+        report["owned_relation_acceptance"] = {
+            "artifact_sha256": _sha256(args.owned_relation_acceptance),
+            "status": str(acceptance.get("status")),
+            "relation_only_character_oracle": _owned_relation_metrics(
+                acceptance, script_predictor=script_predictor,
+            ),
+            "matched_direct_hwr": _owned_relation_metrics(
+                acceptance, _grouped(direct), finalized, script_predictor,
+            ),
+            "commercial_training_rights": str(acceptance.get("commercial_training_rights")),
+        }
     if args.crohme_candidates is not None:
         crohme = list(_json_lines(args.crohme_candidates))
         crohme_finalized = _predictions(args.crohme_finalized)

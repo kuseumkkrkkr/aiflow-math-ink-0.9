@@ -29,6 +29,10 @@ FORMULA_OUTPUT_SCHEMA = "aiflow-formula-layout-finalized/v1"
 # confusable multi-bar HWR candidates without depending on finalized Top-1.
 OPENING_FENCES = frozenset({"(", "[", r"\{", r"\langle", r"\lceil", r"\lfloor"})
 CLOSING_FENCES = frozenset({")", "]", r"\}", r"\rangle", r"\rceil", r"\rfloor"})
+FENCE_PAIRS = {
+    "(": ")", "[": "]", r"\{": r"\}", r"\langle": r"\rangle",
+    r"\lceil": r"\rceil", r"\lfloor": r"\rfloor",
+}
 EQUALITY_FAMILY = frozenset({
     "=", r"\approx", r"\asymp", r"\doteq", r"\equiv", r"\neq",
     r"\rightleftharpoons", r"\rightrightarrows", r"\simeq",
@@ -50,6 +54,7 @@ class LayoutConfig:
     script_max_horizontal_gap: float = 0.75
     structural_candidate_floor: float = 0.25
     root_inner_left_ratio: float = 0.05
+    root_parenthesized_gap_ratio: float = 0.35
     opening_fence_script_veto_floor: float = 0.75
     equality_script_child_veto_floor: float = 0.30
     infix_script_child_veto_floor: float = 0.75
@@ -218,6 +223,42 @@ def infer_formula_layout(
             if inside:
                 inside_children.append(child)
 
+        # Handwritten radicals often stop their overbar just before a complete
+        # parenthesized radicand. A strong, immediately adjacent matching fence
+        # pair supplies the missing semantic span without extending past it.
+        for opening, closing in FENCE_PAIRS.items():
+            opening_children = [
+                child for child, box in enumerate(boxes)
+                if child != parent and child not in seen_roots
+                and _score_any(scores[child], (opening,))
+                >= layout.opening_fence_script_veto_floor
+                and box["cx"] > root["cx"]
+                and box["right"] >= root["left"]
+                and max(0.0, box["left"] - root["right"])
+                <= reference * layout.root_parenthesized_gap_ratio
+            ]
+            if not opening_children:
+                continue
+            open_child = min(opening_children, key=lambda child: boxes[child]["left"])
+            closing_children = [
+                child for child, box in enumerate(boxes)
+                if child != parent and child not in seen_roots
+                and box["cx"] > boxes[open_child]["cx"]
+                and _score_any(scores[child], (closing,))
+                >= layout.opening_fence_script_veto_floor
+            ]
+            if not closing_children:
+                continue
+            close_child = min(closing_children, key=lambda child: boxes[child]["left"])
+            span_left, span_right = boxes[open_child]["left"], boxes[close_child]["right"]
+            inside_children.extend(
+                child for child, box in enumerate(boxes)
+                if child != parent and child not in seen_roots
+                and span_left <= box["cx"] <= span_right
+            )
+            break
+        inside_children = sorted(set(inside_children))
+
         # A lone/unclosed opening fence next to a radical is more safely read
         # as a baseline expression (for example ``sqrt (a)``) than as a
         # partially captured radicand. Complete parenthesized radicands remain
@@ -259,13 +300,30 @@ def infer_formula_layout(
             if child in assigned or child in structural_parents:
                 continue
             signature = frozenset(region_memberships.get(child, ()))
+
+            def compatible_region(parent: int) -> bool:
+                parent_signature = frozenset(region_memberships.get(parent, ()))
+                if parent_signature == signature:
+                    return True
+                # A closing fence captured by a radical may carry a script just
+                # beyond the handwritten overbar. Keep that script in the same
+                # radical region; fraction regions and non-fence bases remain
+                # strictly isolated.
+                return bool(
+                    not signature
+                    and parent_signature
+                    and all(relation == "contains" for _, relation in parent_signature)
+                    and _score_any(scores[parent], CLOSING_FENCES)
+                    >= layout.opening_fence_script_veto_floor
+                )
+
             parents = [
                 parent for parent, base in enumerate(boxes)
                 if parent != child and parent not in structural_parents
                 and parent not in assigned
                 and base["cx"] < box["cx"]
                 and base["height"] >= reference * 0.45
-                and frozenset(region_memberships.get(parent, ())) == signature
+                and compatible_region(parent)
                 and max(0.0, box["left"] - base["right"]) <= reference * layout.script_max_horizontal_gap
             ]
             if not parents:
@@ -285,8 +343,14 @@ def infer_formula_layout(
                 relation = "subscript"
             else:
                 continue
+            inherited_regions = frozenset(region_memberships.get(parent, ())) - signature
             if not append_edge(parent, child, relation, 0.80, "script_geometry"):
                 continue
+            for region_parent, region_relation in inherited_regions:
+                append_edge(
+                    region_parent, child, region_relation, 0.78,
+                    "script_region_closure", exclusive_child=False,
+                )
             # A script is a span, not an isolated pair. Tiny punctuation such
             # as the minus in e^{-n} may fail the size test but is accepted only
             # when bracketed between the confirmed base and script endpoint.
@@ -593,6 +657,32 @@ def _self_test() -> None:
         _sample("root", 0, 0, 40, 40, r"\sqrt{}"),
         _sample("open", 10, 10, 18, 30, "("),
     ])["edges"]
+    parenthesized_root = [
+        _sample("root", 0, 0, 40, 40, r"\sqrt{}"),
+        _sample("open", 41, 2, 48, 38, "("),
+        _sample("value", 50, 10, 65, 30, "a"),
+        _sample("close", 67, 2, 74, 38, ")"),
+    ]
+    assert {
+        (edge["parent"], edge["child"], edge["type"])
+        for edge in infer_formula_layout(parenthesized_root)["edges"]
+    } == {
+        ("root", "open", "contains"),
+        ("root", "value", "contains"),
+        ("root", "close", "contains"),
+    }
+    assert serialize_formula(parenthesized_root) == r"\sqrt{(a)}"
+    parenthesized_root_script = [
+        *parenthesized_root,
+        _sample("power", 72, -2, 79, 10, "2"),
+    ]
+    root_script_edges = {
+        (edge["parent"], edge["child"], edge["type"])
+        for edge in infer_formula_layout(parenthesized_root_script)["edges"]
+    }
+    assert ("close", "power", "superscript") in root_script_edges
+    assert ("root", "power", "contains") in root_script_edges
+    assert serialize_formula(parenthesized_root_script) == r"\sqrt{(a)^{2}}"
     contextual, audit = recontextualize_formula_rows(list(reversed(scripted)))
     assert sorted((row["record_id"], row["context"]["index"]) for row in contextual) == [("2", 1), ("x", 0)]
     assert serialize_formula(scripted) == "x^{2}" and audit["grouping_mutations"] == 0

@@ -1,6 +1,6 @@
 {
   "schema": "aiflow-formula-layout-runtime-manifest/v1",
-  "generated_at": "2026-08-19T08:36:36.3933478Z",
+  "generated_at": "2026-08-19T09:20:27.7723354Z",
   "status": "shadow_runtime_only",
   "pipeline": [
     "frozen candidate-preserving HWR and context finalizer",
@@ -22,6 +22,7 @@
       "script_max_horizontal_gap": 0.75,
       "structural_candidate_floor": 0.25,
       "root_inner_left_ratio": 0.05,
+      "root_parenthesized_gap_ratio": 0.35,
       "opening_fence_script_veto_floor": 0.75,
       "equality_script_child_veto_floor": 0.3,
       "infix_script_child_veto_floor": 0.75
@@ -40,6 +41,7 @@
     "direct_project_owned": {
       "formulas": 95,
       "records": 387,
+      "flat_formulas": 94,
       "flat_structure_false_positive_edges": 0,
       "flat_structure_affected_formulas": 0,
       "layout_order_exact": 0.9894736842105263,
@@ -49,22 +51,34 @@
       "multi_parent_nodes": 0,
       "passed": true
     },
+    "owned_relation_review": {
+      "formulas": 3,
+      "glyphs": 10,
+      "relations": 5,
+      "relation_formula_exact_count": 3,
+      "relation_formula_exact": 1.0,
+      "matched_direct_hwr_formulas": 1,
+      "relation_and_character_formula_exact_count": 1,
+      "commercial_training_rights": "project_owned_consent_verified",
+      "untouched_acceptance": false,
+      "passed_as_shadow_evidence": true
+    },
     "crohme_noncommercial_diagnostic": {
       "formulas": 984,
       "records": 9535,
       "relation_formula_exact_before": 0.5477642276422764,
-      "relation_formula_exact_after": 0.5599593495934959,
+      "relation_formula_exact_after": 0.5609756097560976,
       "relation_formula_exact_count_before": 539,
-      "relation_formula_exact_count_after": 551,
+      "relation_formula_exact_count_after": 552,
       "relation_micro_f1_before": 0.7743221690590111,
-      "relation_micro_f1_after": 0.7746726069933847,
+      "relation_micro_f1_after": 0.775003374274531,
       "relation_and_character_formula_exact_before": 0.22357723577235772,
-      "relation_and_character_formula_exact_after": 0.22764227642276422,
+      "relation_and_character_formula_exact_after": 0.22865853658536586,
       "relation_and_character_formula_exact_count_before": 220,
-      "relation_and_character_formula_exact_count_after": 224,
+      "relation_and_character_formula_exact_count_after": 225,
       "character_formula_exact_unchanged": 0.2886178861788618,
       "formulas_with_multi_parent_nodes": 101,
-      "multi_parent_nodes": 261,
+      "multi_parent_nodes": 262,
       "product_validation": false
     }
   },
@@ -81,23 +95,29 @@
     }
   ],
   "evidence": {
+    "owned_relation_annotation_sha256": "dbe325be4bb112b00c66819de53c6d129990cfe12698b7427ce521e864a620ee",
+    "owned_relation_acceptance": {
+      "path": "D:\\AIFlow-Workspace\\PrivateData\\math-ink-data-collector\\derived\\context-candidates-20260819-r3\\owned-formula-relation-acceptance-r1.json",
+      "sha256": "f79a6d9e90451d0c4e92f9d41f72f71064a00e348487073bb582ffb8d5d9bc14"
+    },
     "evaluation": {
-      "path": "D:\\AIFlow-Workspace\\PrivateData\\math-ink-data-collector\\derived\\context-candidates-20260819-r3\\formula_layout_sequence_eval_r25_graph_audited_runtime.json",
-      "sha256": "346b3316793a7b9965083edde7f69d9531edf613c73423ea1ac88b7a01d9929f"
+      "path": "D:\\AIFlow-Workspace\\PrivateData\\math-ink-data-collector\\derived\\context-candidates-20260819-r3\\formula_layout_sequence_eval_r29_nested_root_script.json",
+      "sha256": "af0ee65c362c69d1f6ab27437799b3a3f71ccce9fb03454f35fd550f2a96f353"
     },
     "direct_export_report": {
-      "path": "D:\\AIFlow-Workspace\\PrivateData\\math-ink-data-collector\\derived\\context-candidates-20260819-r3\\formula-runtime-direct-r6-post-context.report.json",
-      "sha256": "3fc39430846ffce35b282f56311120ac76f8482b0d2e1073ac23e1b4e97ad53a"
+      "path": "D:\\AIFlow-Workspace\\PrivateData\\math-ink-data-collector\\derived\\context-candidates-20260819-r3\\formula-runtime-direct-r8-nested-relations.report.json",
+      "sha256": "4ee94bd971a6e7a0eaf70290a079af23fa289be55301933e9e0216850d395689"
     },
     "crohme_export_report": {
-      "path": "D:\\AIFlow-Workspace\\PrivateData\\math-ink-data-collector\\derived\\context-candidates-20260819-r3\\formula-runtime-crohme-r5-post-context.report.json",
-      "sha256": "82b376a6de3d5e222685581239cbfbba32ec845aa5031dbb99c4922e19717374"
+      "path": "D:\\AIFlow-Workspace\\PrivateData\\math-ink-data-collector\\derived\\context-candidates-20260819-r3\\formula-runtime-crohme-r7-nested-relations.report.json",
+      "sha256": "aaf23a776bad7a3c7d2a055af48261e4febc29ec0140255aac78d7d261b8f855"
     },
-    "direct_formula_output_sha256": "b75c885e1086736441dc1741c1b46b2dd11a6084c48a0d0e61e1bfbea5b97bfc",
-    "crohme_formula_output_sha256": "9ac60f918f7d951755e6082bcdba24e93281d7231046343e5e9d106b1a05059b"
+    "direct_formula_output_sha256": "f28b12c7ca003b0b880471c4dcb259dbc67edde576a5004def3188b7d6fc5c20",
+    "crohme_formula_output_sha256": "7b24246b2d7004ddfa6704b17979b31eac96ccd416c6bb2aeceaa233b2732890"
   },
   "promotion_blockers": [
-    "the accepted project-owned 95-formula corpus has no positive structural relation labels",
+    "the three reviewed project-owned relation formulas were used during implementation and are not an untouched acceptance set",
+    "only one reviewed relation formula is currently matched to the direct HWR candidate stream",
     "fresh writer-disjoint project-owned complex formulas are not yet available",
     "CROHME is noncommercial repeated diagnostic evidence, not a product acceptance set"
   ]
