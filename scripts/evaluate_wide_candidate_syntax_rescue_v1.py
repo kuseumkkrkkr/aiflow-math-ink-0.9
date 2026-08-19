@@ -18,7 +18,7 @@ from evaluate_48hz_prefix_v1 import _sha256
 from evaluate_dual_hwr_numeric_rescue_v1 import _decorate_auxiliary
 from wide_candidate_syntax_rescue_v1 import (
     CONFIG_SCHEMA, DEFAULT_CONFIGURATION, SCHEMA as RESCUE_SCHEMA,
-    _self_test as rescue_self_test, apply_wide_candidate_syntax_rescue,
+    _self_test as rescue_self_test, _write, apply_wide_candidate_syntax_rescue,
 )
 
 
@@ -102,6 +102,8 @@ def main() -> int:
     parser.add_argument("--crohme-wide-candidates", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--config-output", type=Path)
+    parser.add_argument("--direct-runtime-output", type=Path)
+    parser.add_argument("--crohme-runtime-output", type=Path)
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
     if args.self_test:
@@ -122,6 +124,13 @@ def main() -> int:
     output_path, config_path = paths[6:]
     if output_path.exists() or config_path.exists():
         parser.error("refusing to overwrite wide syntax evaluation evidence")
+    requested_runtime_paths = [
+        value.expanduser().resolve() for value in (
+            args.direct_runtime_output, args.crohme_runtime_output,
+        ) if value is not None
+    ]
+    if any(path.exists() for path in requested_runtime_paths):
+        parser.error("refusing to overwrite wide syntax runtime output")
     direct_truth = list(_json_lines(paths[1]))
     direct_baseline = list(_json_lines(paths[0]))
     direct_challenger, direct_audit = apply_wide_candidate_syntax_rescue(
@@ -204,10 +213,24 @@ def main() -> int:
         json.dumps(config, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8", newline="\n",
     )
+    runtime_outputs = {}
+    for name, path, rows in (
+        ("direct", args.direct_runtime_output, direct_challenger),
+        ("crohme", args.crohme_runtime_output, crohme_challenger),
+    ):
+        if path is None:
+            continue
+        runtime_path = path.expanduser().resolve()
+        runtime_path.parent.mkdir(parents=True, exist_ok=True)
+        _write(runtime_path, rows)
+        runtime_outputs[name] = {
+            "path": str(runtime_path), "sha256": _sha256(runtime_path),
+        }
     print(json.dumps({
         "report": str(output_path), "report_sha256": _sha256(output_path),
         "config": str(config_path), "config_sha256": _sha256(config_path),
         "gate": gate, "direct": direct, "crohme": crohme,
+        "runtime_outputs": runtime_outputs,
     }, ensure_ascii=False))
     return 0
 
