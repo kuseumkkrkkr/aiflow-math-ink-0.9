@@ -41,6 +41,10 @@ from formula_syntax_rescue_v1 import (
 from semantic_equation_guard_v2 import apply_semantic_equation_guard_v2
 from semantic_fence_guard_v1 import apply_semantic_fence_guard
 from semantic_infix_guard_v1 import apply_semantic_infix_guard
+from singleton_shape_rescue_v1 import (
+    apply_singleton_shape_rescue,
+    validate_configuration as validate_singleton_shape_configuration,
+)
 import train_masked_context_reranker_v1 as masked
 from train_owned_formula_context_v1 import (
     _components,
@@ -63,6 +67,7 @@ SYNTAX_RESCUE_CONFIG_SCHEMAS = frozenset({
     "aiflow-formula-syntax-rescue-runtime-config/v1",
     "aiflow-formula-syntax-rescue-runtime-config/v2",
 })
+SINGLETON_SHAPE_CONFIG_SCHEMA = "aiflow-singleton-shape-rescue-runtime-config/v1"
 
 
 def _runtime_rows(
@@ -109,11 +114,13 @@ def _runtime_rows(
 def _decision_metadata(
     row: dict, hwr: str, context_token: str, equation_token: str,
     fence_token: str, first_final_token: str, pre_sequence_token: str,
-    pre_syntax_token: str, final_token: str,
+    pre_syntax_token: str, pre_singleton_token: str, final_token: str,
     supported_exact: bool = False,
 ) -> tuple[bool, str, str]:
     context_available = int(row["context"]["length"]) > 1
-    if final_token != pre_syntax_token:
+    if final_token != pre_singleton_token:
+        source = "singleton_shape_rescue_v1"
+    elif pre_singleton_token != pre_syntax_token:
         source = "formula_syntax_rescue_v1"
     elif pre_syntax_token != pre_sequence_token:
         source = "formula_sequence_guard_v1"
@@ -165,6 +172,7 @@ class OwnedFormulaContextFinalizer:
         script_layout_checkpoint: Path | None = None,
         formula_sequence_config: Path | None = None,
         formula_syntax_rescue_config: Path | None = None,
+        singleton_shape_config: Path | None = None,
     ) -> None:
         if batch_size < 1:
             raise ValueError("batch size must be positive")
@@ -237,8 +245,48 @@ class OwnedFormulaContextFinalizer:
                 rescue_payload["configuration"]
             )
             self.syntax_rescue_config_sha256 = _sha256(rescue_path)
+        self.singleton_shape_configuration = None
+        self.singleton_shape_config_sha256 = None
+        self.singleton_shape_evidence_sha256 = None
+        if singleton_shape_config is not None:
+            singleton_path = Path(singleton_shape_config).expanduser().resolve()
+            if not singleton_path.is_file():
+                raise FileNotFoundError(
+                    f"singleton shape rescue config is missing: {singleton_path}"
+                )
+            singleton_payload = json.loads(singleton_path.read_text(encoding="utf-8"))
+            if (
+                singleton_payload.get("schema") != SINGLETON_SHAPE_CONFIG_SCHEMA
+                or singleton_payload.get("checkpoint_sha256") != self.checkpoint_sha256
+                or singleton_payload.get("hwr_checkpoint_sha256") != self.hwr_checkpoint_sha256
+                or singleton_payload.get("gate", {}).get("runtime_admitted") is not True
+            ):
+                raise ValueError("singleton shape rescue config contract mismatch")
+            self.singleton_shape_configuration = validate_singleton_shape_configuration(
+                singleton_payload["configuration"]
+            )
+            self.singleton_shape_config_sha256 = _sha256(singleton_path)
+            evidence_sha256 = str(singleton_payload.get("direct_auxiliary_sha256", ""))
+            if len(evidence_sha256) != 64 or any(
+                value not in "0123456789abcdef" for value in evidence_sha256
+            ):
+                raise ValueError("singleton shape rescue evidence hash is invalid")
+            self.singleton_shape_evidence_sha256 = evidence_sha256
 
-    def finalize(self, rows: list[dict]) -> tuple[list[dict], dict]:
+    def finalize(
+        self, rows: list[dict], singleton_shape_evidence: list[dict] | None = None,
+        singleton_shape_evidence_sha256: str | None = None,
+    ) -> tuple[list[dict], dict]:
+        if (self.singleton_shape_configuration is None) != (
+            singleton_shape_evidence is None
+        ):
+            raise ValueError(
+                "singleton shape rescue config and evidence must be supplied together"
+            )
+        if self.singleton_shape_configuration is not None and (
+            singleton_shape_evidence_sha256 != self.singleton_shape_evidence_sha256
+        ):
+            raise ValueError("singleton shape rescue evidence hash mismatch")
         runtime_rows = _runtime_rows(
             rows, self.labels, require_context=not self.formula_layout,
         )
@@ -357,6 +405,19 @@ class OwnedFormulaContextFinalizer:
                 "enabled": False,
                 "policy": "valid numeric syntax rescue requires an admitted config",
             }
+        pre_singleton_predictions = predictions
+        if self.singleton_shape_configuration is not None:
+            predictions, singleton_shape_audit = apply_singleton_shape_rescue(
+                runtime_rows, pre_singleton_predictions,
+                singleton_shape_evidence or [], self.singleton_shape_configuration,
+            )
+            singleton_shape_audit["config_sha256"] = self.singleton_shape_config_sha256
+            singleton_shape_audit["evidence_sha256"] = singleton_shape_evidence_sha256
+        else:
+            singleton_shape_audit = {
+                "enabled": False,
+                "policy": "singleton shape rescue requires admitted auxiliary evidence",
+            }
         output = []
         for row in runtime_rows:
             record_id = str(row["record_id"])
@@ -372,19 +433,24 @@ class OwnedFormulaContextFinalizer:
                 str(first_predictions[record_id]),
                 str(pre_sequence_predictions[record_id]),
                 str(pre_syntax_predictions[record_id]),
+                str(pre_singleton_predictions[record_id]),
                 prediction,
                 record_id in supported_exact_records,
             )
             output.append({
                 "schema": (
-                    "aiflow-formula-context-finalized/v7"
-                    if self.syntax_rescue_configuration is not None
+                    "aiflow-formula-context-finalized/v8"
+                    if self.singleton_shape_configuration is not None
                     else (
-                        "aiflow-formula-context-finalized/v6"
-                        if self.sequence_guard_configuration is not None
+                        "aiflow-formula-context-finalized/v7"
+                        if self.syntax_rescue_configuration is not None
                         else (
-                            "aiflow-formula-context-finalized/v5"
-                            if self.formula_layout else "aiflow-formula-context-finalized/v4"
+                            "aiflow-formula-context-finalized/v6"
+                            if self.sequence_guard_configuration is not None
+                            else (
+                                "aiflow-formula-context-finalized/v5"
+                                if self.formula_layout else "aiflow-formula-context-finalized/v4"
+                            )
                         )
                     )
                 ),
@@ -426,6 +492,9 @@ class OwnedFormulaContextFinalizer:
             ) + (
                 ["formula_syntax_rescue_v1"]
                 if self.syntax_rescue_configuration is not None else []
+            ) + (
+                ["singleton_shape_rescue_v1"]
+                if self.singleton_shape_configuration is not None else []
             ),
             "records": len(output),
             "formulas": len({row["formula_id"] for row in output}),
@@ -442,6 +511,7 @@ class OwnedFormulaContextFinalizer:
             "semantic_guards": semantic_audit,
             "formula_sequence_guard": sequence_audit,
             "formula_syntax_rescue": syntax_rescue_audit,
+            "singleton_shape_rescue": singleton_shape_audit,
         }
 
 
@@ -465,25 +535,33 @@ def _self_test() -> None:
     clean = _runtime_rows(rows, labels)
     assert "label" not in clean[0]
     assert clean[0]["final_topk"] == ["1", "+"]
-    assert _decision_metadata(clean[0], "1", "+", "+", "+", "+", "+", "+", "+") == (
+    assert _decision_metadata(
+        clean[0], "1", "+", "+", "+", "+", "+", "+", "+", "+",
+    ) == (
         False, "ambiguous_no_formula_context", "context_prior_only",
     )
     contextual = {**clean[0], "context": {"index": 1, "length": 3}}
-    assert _decision_metadata(contextual, "1", "1", "1", "1", "+", "+", "+", "+") == (
+    assert _decision_metadata(
+        contextual, "1", "1", "1", "1", "+", "+", "+", "+", "+",
+    ) == (
         True, "finalized", "semantic_infix_guard",
     )
     assert _decision_metadata(
-        contextual, "h", "b", "b", "b", "b", "b", "b", "b", True
+        contextual, "h", "b", "b", "b", "b", "b", "b", "b", "b", True
     ) == (True, "finalized", "owned_supported_exact_context_guard")
     assert _decision_metadata(
-        contextual, "x", r"\times", r"\times", r"\times", r"\times", "x", "x", "x"
+        contextual, "x", r"\times", r"\times", r"\times", r"\times",
+        "x", "x", "x", "x",
     ) == (True, "finalized", "context_recheck_guard_v1")
     assert _decision_metadata(
-        contextual, "b", "b", "b", "b", "b", "b", "6", "6"
+        contextual, "b", "b", "b", "b", "b", "b", "6", "6", "6"
     ) == (True, "finalized", "formula_sequence_guard_v1")
     assert _decision_metadata(
-        contextual, "4", "4", "4", "4", "4", "4", "4", "+"
+        contextual, "4", "4", "4", "4", "4", "4", "4", "+", "+"
     ) == (True, "finalized", "formula_syntax_rescue_v1")
+    assert _decision_metadata(
+        clean[0], "1", "1", "1", "1", "1", "1", "1", "1", "/",
+    ) == (False, "ambiguous_no_formula_context", "singleton_shape_rescue_v1")
     equation_rows = [
         {
             "record_id": f"e{index}", "formula_id": "wrong-answer",
@@ -544,6 +622,14 @@ def main() -> int:
         help="shadow: restore one strongly implied structural token",
     )
     parser.add_argument(
+        "--singleton-shape-config", type=Path,
+        help="shadow: admit auxiliary HWR evidence for context-free singleton glyphs",
+    )
+    parser.add_argument(
+        "--singleton-shape-evidence", type=Path,
+        help="auxiliary HWR candidate rows paired with --singleton-shape-config",
+    )
+    parser.add_argument(
         "--enable-equation-correction", action="store_true",
         help="research-only: allow exact arithmetic to override HWR candidates",
     )
@@ -557,6 +643,10 @@ def main() -> int:
         parser.error("--formula-sequence-config requires --enable-formula-layout")
     if args.formula_syntax_rescue_config and not args.enable_formula_layout:
         parser.error("--formula-syntax-rescue-config requires --enable-formula-layout")
+    if bool(args.singleton_shape_config) != bool(args.singleton_shape_evidence):
+        parser.error(
+            "--singleton-shape-config and --singleton-shape-evidence are required together"
+        )
     if args.self_test:
         _self_test()
         print(json.dumps({"self_test": "pass"}))
@@ -578,8 +668,23 @@ def main() -> int:
         script_layout_checkpoint=args.script_layout_checkpoint,
         formula_sequence_config=args.formula_sequence_config,
         formula_syntax_rescue_config=args.formula_syntax_rescue_config,
+        singleton_shape_config=args.singleton_shape_config,
     )
-    finalized, audit = finalizer.finalize(list(_json_lines(input_path)))
+    singleton_shape_evidence_path = (
+        Path(args.singleton_shape_evidence).expanduser().resolve()
+        if args.singleton_shape_evidence is not None else None
+    )
+    if singleton_shape_evidence_path is not None and not singleton_shape_evidence_path.is_file():
+        parser.error(f"singleton shape evidence is missing: {singleton_shape_evidence_path}")
+    singleton_shape_evidence = (
+        list(_json_lines(singleton_shape_evidence_path))
+        if singleton_shape_evidence_path is not None else None
+    )
+    finalized, audit = finalizer.finalize(
+        list(_json_lines(input_path)), singleton_shape_evidence,
+        _sha256(singleton_shape_evidence_path)
+        if singleton_shape_evidence_path is not None else None,
+    )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     _write(output_path, finalized)
     print(json.dumps({

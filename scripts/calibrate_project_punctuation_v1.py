@@ -119,8 +119,12 @@ def _encode(model: InkClassifierV1, features: np.ndarray | torch.Tensor, device:
     return torch.cat(chunks)
 
 
-def _direct_rows(canonical_root: Path, math_index: dict[str, int]) -> tuple[np.ndarray, torch.Tensor, list[str], list[dict]]:
-    path = canonical_root / "character_classifier_v1" / "project_owned_ownership_eval.jsonl.gz"
+def _direct_rows(
+    canonical_root: Path, math_index: dict[str, int], path: Path | None = None,
+) -> tuple[np.ndarray, torch.Tensor, list[str], list[dict]]:
+    path = path or (
+        canonical_root / "character_classifier_v1" / "project_owned_ownership_eval.jsonl.gz"
+    )
     rows = list(_json_lines(path))
     if not rows:
         raise ValueError(f"no project ownership rows: {path}")
@@ -384,6 +388,10 @@ def _self_test() -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--canonical-root", type=Path, default=DEFAULT_CANONICAL_ROOT)
+    parser.add_argument(
+        "--direct-rows", type=Path,
+        help="optional project-owned derivative; defaults to the canonical 47-formula rows",
+    )
     parser.add_argument("--cache-dir", type=Path, required=False)
     parser.add_argument("--base-checkpoint", type=Path)
     parser.add_argument("--output", type=Path)
@@ -405,6 +413,10 @@ def main() -> int:
     if args.calibration_steps < 1 or args.calibration_learning_rate <= 0:
         parser.error("--calibration-steps and --calibration-learning-rate must be positive")
     canonical_root = _d_path(args.canonical_root, "canonical root")
+    direct_rows_path = (
+        _d_path(args.direct_rows, "project-owned derivative")
+        if args.direct_rows is not None else None
+    )
     cache_dir = _d_path(args.cache_dir, "cache")
     checkpoint_path = _d_path(args.base_checkpoint, "base checkpoint")
     output = _d_path(args.output, "output")
@@ -428,7 +440,9 @@ def main() -> int:
     auxiliary_truth = list(_json_lines(cache_dir / cache["sets"]["auxiliary_eval"]["truth"])) if auxiliary_labels else []
     model = _load_base(checkpoint_path, math_labels, auxiliary_labels, device, args.input_mode)
     math_index = {label: index for index, label in enumerate(math_labels)}
-    direct_features, direct_labels, writers, direct_truth = _direct_rows(canonical_root, math_index)
+    direct_features, direct_labels, writers, direct_truth = _direct_rows(
+        canonical_root, math_index, direct_rows_path,
+    )
     direct_embeddings = _encode(model, direct_features, device, math_input_mode)
     math_eval_embeddings = _encode(model, math_eval.features, device, math_input_mode)
     auxiliary_embeddings = _encode(model, auxiliary_eval.features, device, auxiliary_input_mode) if auxiliary_eval is not None else None
@@ -448,6 +462,10 @@ def main() -> int:
         "head_mode": head_mode,
         "data_policy": {
             "project_owned_training": "only real symbol trajectories from non-held hashed writer groups",
+            "project_owned_derivative": str(
+                direct_rows_path
+                or canonical_root / "character_classifier_v1" / "project_owned_ownership_eval.jsonl.gz"
+            ),
             "project_owned_formula_grouping_training": False,
             "raw_dataset_mutation": False,
             "external_rehearsal": "math_train only; fixed external holdout excluded",
@@ -504,7 +522,7 @@ def main() -> int:
             "folds": folds,
             "acceptance": acceptance,
             "product_adopted": False,
-            "limit": "three project writer groups are a small research validation set; formula grouping and decoding remain absent",
+            "limit": f"{len(_writer_split_indices(writers))} project writer groups are a research validation set; formula grouping and decoding remain absent",
         }
         output.mkdir(parents=True, exist_ok=True)
         torch.save({

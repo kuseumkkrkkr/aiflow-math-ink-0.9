@@ -24,8 +24,10 @@ from evaluate_48hz_prefix_v1 import (
     DEFAULT_BASE,
     DEFAULT_LOO,
     DEFAULT_PRODUCT,
+    INPUT_MODE,
     _load_loo_heads,
     _load_model,
+    _prefix_tensor,
     _sha256,
     resample_direct_48hz,
 )
@@ -36,6 +38,7 @@ from evaluate_homograph_context_reranker_v1 import (
     _score_items,
     _write_rows,
 )
+from train_character_classifier_v1 import apply_input_mode
 
 
 FORMULA_FINGERPRINT_FIELDS = (
@@ -160,11 +163,115 @@ def _items(
     }
 
 
+@torch.inference_mode()
+def _score_fused(
+    items: list[dict], base, labels: list[str], base_path: Path,
+    loo_path: Path, product_path: Path, expanded_loo_path: Path,
+    weight: float, device: torch.device, batch_size: int = 512,
+) -> tuple[dict[str, dict], dict]:
+    current_heads = _load_loo_heads(loo_path, base_path, labels, device)
+    expanded_heads = _load_loo_heads(expanded_loo_path, base_path, labels, device)
+    product, product_labels, _ = _load_model(product_path, device)
+    if product_labels != labels:
+        raise ValueError("base/product HWR vocabularies differ")
+    for name, value in base.state_dict().items():
+        if not name.startswith("math_head.") and not torch.equal(
+            value.detach().cpu(), product.state_dict()[name].detach().cpu(),
+        ):
+            raise ValueError(f"base/product HWR encoders differ: {name}")
+    missing_current = {
+        str(row["hwr_head_group"]) for row in items
+        if row["hwr_policy"] == "legacy_writer_loo"
+        and str(row["hwr_head_group"]) not in current_heads
+    }
+    missing_expanded = {
+        str(row["writer_group"]) for row in items
+        if str(row["writer_group"]) not in expanded_heads
+    }
+    if missing_current or missing_expanded:
+        raise ValueError(
+            f"fusion HWR heads missing: current={sorted(missing_current)}, "
+            f"expanded={sorted(missing_expanded)}"
+        )
+    output: dict[str, dict] = {}
+    for start in range(0, len(items), batch_size):
+        batch = items[start:start + batch_size]
+        raw = np.stack([_prefix_tensor(row["strokes"]) for row in batch]).astype(
+            np.float32, copy=False,
+        )
+        embeddings = base.encode(
+            torch.from_numpy(apply_input_mode(raw, INPUT_MODE)).to(device)
+        )
+        current_logits = torch.empty((len(batch), len(labels)), device=device)
+        for index, row in enumerate(batch):
+            if row["hwr_policy"] == "legacy_writer_loo":
+                current_logits[index] = current_heads[str(row["hwr_head_group"])](
+                    embeddings[index:index + 1]
+                )[0]
+            else:
+                current_logits[index] = product.math_head(embeddings[index:index + 1])[0]
+        expanded_logits = torch.empty_like(current_logits)
+        writers = [str(row["writer_group"]) for row in batch]
+        for writer in sorted(set(writers)):
+            indices = torch.tensor(
+                [index for index, value in enumerate(writers) if value == writer],
+                device=device,
+            )
+            expanded_logits[indices] = expanded_heads[writer](embeddings[indices])
+        probabilities = (
+            (1.0 - weight) * current_logits.softmax(dim=1)
+            + weight * expanded_logits.softmax(dim=1)
+        )
+        values, indices = probabilities.topk(5, dim=1)
+        for row, token_indices, token_probabilities in zip(
+            batch, indices.cpu().tolist(), values.cpu().tolist(), strict=True,
+        ):
+            output[str(row["record_id"])] = {
+                "final_topk": [labels[index] for index in token_indices],
+                "final_topk_probabilities": [float(value) for value in token_probabilities],
+            }
+    return output, {
+        "base_checkpoint_sha256": _sha256(base_path),
+        "writer_loo_heads_sha256": _sha256(loo_path),
+        "product_checkpoint_sha256": _sha256(product_path),
+        "expanded_writer_loo_heads_sha256": _sha256(expanded_loo_path),
+        "scoring_policy": "current_expanded_writer_loo_probability_fusion",
+        "expanded_writer_loo_weight": weight,
+        "labels": len(labels),
+    }
+
+
 def _score(
     items: list[dict], base_path: Path, loo_path: Path, product_path: Path,
-    device: torch.device,
+    device: torch.device, expanded_loo_path: Path | None = None,
+    expanded_loo_weight: float | None = None,
 ) -> tuple[dict[str, dict], dict, list[str]]:
+    if expanded_loo_weight is not None and expanded_loo_path is None:
+        raise ValueError("expanded LOO fusion weight requires expanded LOO heads")
+    if expanded_loo_weight is not None and not 0.0 <= expanded_loo_weight <= 1.0:
+        raise ValueError("expanded LOO fusion weight must be in [0,1]")
     base, base_labels, _ = _load_model(base_path, device)
+    if expanded_loo_path is not None and expanded_loo_weight is not None:
+        scores, checkpoints = _score_fused(
+            items, base, base_labels, base_path, loo_path, product_path,
+            expanded_loo_path, expanded_loo_weight, device,
+        )
+        return scores, checkpoints, base_labels
+    if expanded_loo_path is not None:
+        heads = _load_loo_heads(expanded_loo_path, base_path, base_labels, device)
+        missing_heads = {
+            str(row["writer_group"]) for row in items
+            if str(row["writer_group"]) not in heads
+        }
+        if missing_heads:
+            raise ValueError(f"expanded writer-LOO heads missing: {sorted(missing_heads)}")
+        scores = _score_items(items, base, base_labels, device, heads)
+        return scores, {
+            "base_checkpoint_sha256": _sha256(base_path),
+            "expanded_writer_loo_heads_sha256": _sha256(expanded_loo_path),
+            "scoring_policy": "expanded_writer_loo",
+            "labels": len(base_labels),
+        }, base_labels
     heads = _load_loo_heads(loo_path, base_path, base_labels, device)
     product, product_labels, _ = _load_model(product_path, device)
     if product_labels != base_labels:
@@ -261,6 +368,14 @@ def main() -> int:
     parser.add_argument("--legacy-dataset-root", type=Path, default=Path(__file__).resolve().parents[1] / "hf-dataset")
     parser.add_argument("--base-checkpoint", type=Path, default=DEFAULT_BASE)
     parser.add_argument("--loo-heads", type=Path, default=DEFAULT_LOO)
+    parser.add_argument(
+        "--expanded-loo-heads", type=Path,
+        help="optional held-writer heads covering every writer in the expanded corpus",
+    )
+    parser.add_argument(
+        "--expanded-loo-weight", type=float,
+        help="probability weight for expanded LOO heads; requires --expanded-loo-heads",
+    )
     parser.add_argument("--product-checkpoint", type=Path, default=DEFAULT_PRODUCT)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
@@ -272,6 +387,10 @@ def main() -> int:
         return 0
     if args.dataset_root is None or args.output is None:
         parser.error("--dataset-root and --output are required unless --self-test is used")
+    if args.expanded_loo_weight is not None and args.expanded_loo_heads is None:
+        parser.error("--expanded-loo-weight requires --expanded-loo-heads")
+    if args.expanded_loo_weight is not None and not 0.0 <= args.expanded_loo_weight <= 1.0:
+        parser.error("--expanded-loo-weight must be in [0,1]")
     candidate_root = _d_path(args.dataset_root, "expanded dataset")
     legacy_root = _d_path(args.legacy_dataset_root, "legacy dataset")
     output = _d_path(args.output, "candidate cache")
@@ -288,12 +407,18 @@ def main() -> int:
     items, raw_strokes, policy = _items(
         candidate_root, writer_map, int(legacy_summary["legacy_formulas"])
     )
+    expanded_loo_path = (
+        _d_path(args.expanded_loo_heads, "expanded writer-LOO heads")
+        if args.expanded_loo_heads is not None else None
+    )
     scores, checkpoints, hwr_labels = _score(
         items,
         _d_path(args.base_checkpoint, "base HWR checkpoint"),
         _d_path(args.loo_heads, "writer-LOO heads"),
         _d_path(args.product_checkpoint, "product HWR checkpoint"),
         device,
+        expanded_loo_path,
+        args.expanded_loo_weight,
     )
     items, raw_strokes, scores, admission = _admit_supported_formulas(
         items, hwr_labels, raw_strokes, scores
@@ -310,7 +435,14 @@ def main() -> int:
     item_by_id = {str(row["record_id"]): row for row in items}
     for row in rows:
         item = item_by_id[str(row["record_id"])]
-        row["hwr_policy"] = item["hwr_policy"]
+        row["hwr_policy"] = (
+            "current_expanded_writer_loo_probability_fusion"
+            if args.expanded_loo_weight is not None
+            else "expanded_writer_loo" if expanded_loo_path is not None
+            else item["hwr_policy"]
+        )
+        if args.expanded_loo_weight is not None:
+            row["hwr_fusion_weight"] = float(args.expanded_loo_weight)
         row["evaluation_partition"] = item["evaluation_partition"]
     _write_rows(output, rows)
     report = {
@@ -325,10 +457,23 @@ def main() -> int:
         "admission": admission,
         "legacy_prefix": legacy_summary,
         **policy,
-        "hwr_policy_contract": {
-            "legacy_writer": "frozen head trained with that writer held out",
-            "unseen_writer": "frozen product head trained before that writer arrived",
-        },
+        "hwr_policy_contract": (
+            {
+                "mode": "current and expanded writer-LOO probability fusion",
+                "expanded_writer_loo_weight": float(args.expanded_loo_weight),
+                "held_writer_excluded_from_expanded_head_training": True,
+            }
+            if args.expanded_loo_weight is not None else (
+                {
+                    "mode": "expanded writer-LOO",
+                    "held_writer_excluded_from_head_training": True,
+                }
+                if expanded_loo_path is not None else {
+                    "legacy_writer": "frozen head trained with that writer held out",
+                    "unseen_writer": "frozen product head trained before that writer arrived",
+                }
+            )
+        ),
         "checkpoints": checkpoints,
         "output": {"path": str(output), "bytes": output.stat().st_size, "sha256": _sha256(output)},
     }
