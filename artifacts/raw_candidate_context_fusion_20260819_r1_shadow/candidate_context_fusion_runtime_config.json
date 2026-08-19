@@ -1,7 +1,7 @@
 {
   "schema": "aiflow-raw-candidate-context-fusion-runtime-config/v1",
   "rescue_schema": "aiflow-singleton-shape-rescue/v1",
-  "generated_at": "2026-08-19T14:51:15.9909980Z",
+  "generated_at": "2026-08-19T15:20:09.3213452Z",
   "status": "development_only_posthoc_shadow",
   "configuration": {
     "auxiliary_policy": "old_new_product_probability_fusion",
@@ -10,6 +10,11 @@
       "/": 0.5,
       "\\times": 0.45
     }
+  },
+  "numeric_configuration": {
+    "auxiliary_policy": "old_new_product_probability_fusion",
+    "auxiliary_weight": 0.6,
+    "maximum_operand_changes": 2
   },
   "mode": {
     "restricted_candidate_rerank": {
@@ -21,6 +26,13 @@
     "singleton_shape_rescue": {
       "enabled": true,
       "preserve_original_candidate_set": true
+    },
+    "dual_numeric_rescue": {
+      "enabled": true,
+      "maximum_operand_changes": 2,
+      "candidate_contract": "baseline_and_auxiliary_top5_union",
+      "operator_relation_or_fence_mutations": 0,
+      "arithmetic_evaluation": false
     }
   },
   "artifacts": {
@@ -33,12 +45,13 @@
   },
   "evidence": {
     "selected_summary": "selected_summary.json",
-    "selected_summary_sha256": "e2ef776ee407450b63866d6adbad7f2fb1c71682ca5627091d391974caa14f2c",
+    "selected_summary_sha256": "2de232caddd797bc90793a409bec4a4b042c667ab7a9c33b169d486f3b49ab6e",
     "evaluation_evidence": "evaluation_evidence.json",
-    "evaluation_evidence_sha256": "c74cd704e9e0f73be6d3ec81d144f04080d0f8908b0fdbbcffa4e34e519c3904",
+    "evaluation_evidence_sha256": "2917b40230da88ada8b0bb0bcacabaea5232343cf52f42c7969c61605fe2f7df",
     "baseline_formula_exact": {"count": 38, "total": 49},
     "candidate_context_fusion_formula_exact": {"count": 40, "total": 49},
-    "improved_formula_ids": ["aiflow_0049", "aiflow_0078"],
+    "dual_hwr_numeric_formula_exact": {"count": 41, "total": 49},
+    "improved_formula_ids": ["aiflow_0049", "aiflow_0052", "aiflow_0078"],
     "regressed_formula_ids": []
   },
   "provenance": {
@@ -52,10 +65,13 @@
     "criteria": {
       "formula_exact_improved": true,
       "formula_regressions_zero": true,
-      "candidate_set_preserved": true,
-      "new_tokens_zero": true,
+      "restricted_original_top5_preserved": true,
+      "dual_numeric_top5_union_preserved": true,
+      "tokens_outside_dual_hwr_union_zero": true,
       "deleted_glyphs_zero": true,
-      "grouping_mutations_zero": true
+      "grouping_mutations_zero": true,
+      "operator_relation_or_fence_mutations_zero": true,
+      "arithmetic_evaluation_disabled": true
     }
   }
 }

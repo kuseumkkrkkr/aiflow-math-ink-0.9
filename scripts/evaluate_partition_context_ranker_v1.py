@@ -20,6 +20,10 @@ from evaluate_48hz_prefix_v1 import (
     DEFAULT_BASE, DEFAULT_PRODUCT, _load_loo_heads, _load_model, _sha256,
 )
 from evaluate_joint_hwr_grouping_v1 import _candidate_embeddings, _probabilities
+from dual_hwr_numeric_rescue_v1 import (
+    apply_dual_hwr_numeric_rescue,
+    validate_configuration as validate_dual_numeric_configuration,
+)
 from finalize_formula_context_v1 import OwnedFormulaContextFinalizer
 from formula_placement_rescue_v1 import (
     CONFIG_SCHEMA as PLACEMENT_CONFIG_SCHEMA, SCHEMA as PLACEMENT_SCHEMA,
@@ -74,6 +78,11 @@ PRODUCT_SINGLETON_CONFIGURATION = {
     "auxiliary_policy": "old_new_product_probability_fusion",
     "auxiliary_weight": 0.6,
     "token_confidence_thresholds": {"/": 0.50, r"\times": 0.45},
+}
+PRODUCT_DUAL_NUMERIC_CONFIGURATION = {
+    "auxiliary_policy": "old_new_product_probability_fusion",
+    "auxiliary_weight": 0.6,
+    "maximum_operand_changes": 2,
 }
 
 
@@ -460,6 +469,11 @@ def _score_finalized(
     combined_audit = {"enabled": False}
     combined_improved: list[str] = []
     combined_regressed: list[str] = []
+    numeric_score = None
+    numeric_audit = {"enabled": False}
+    numeric_finalizer_audit = {"enabled": False}
+    numeric_improved: list[str] = []
+    numeric_regressed: list[str] = []
     if singleton_auxiliary is not None:
         singleton_rows = _auxiliary_rows(
             samples, selected, singleton_auxiliary["probability"],
@@ -532,6 +546,26 @@ def _score_finalized(
         }
         combined_improved = sorted(base_failures - combined_failures)
         combined_regressed = sorted(combined_failures - base_failures)
+        auxiliary_finalized, numeric_finalizer_audit = finalizer.finalize(
+            singleton_rows,
+        )
+        numeric_rows, numeric_audit = apply_dual_hwr_numeric_rescue(
+            combined_rows, singleton_rows, auxiliary_finalized,
+            singleton_auxiliary["numeric_configuration"],
+        )
+        union_candidates = [
+            {
+                "record_id": row["record_id"],
+                "final_topk": row["candidate_union"],
+            }
+            for row in numeric_rows
+        ]
+        numeric_score = score(numeric_rows, union_candidates)
+        numeric_failures = {
+            str(row["sample_id"]) for row in numeric_score["failures"]
+        }
+        numeric_improved = sorted(base_failures - numeric_failures)
+        numeric_regressed = sorted(numeric_failures - base_failures)
     placement_audit = equality_audit = {"enabled": False}
     auxiliary_rows = None
     placement_score = equality_score = None
@@ -550,7 +584,7 @@ def _score_finalized(
         )
         equality_score = score(final_rows, auxiliary_rows)
     total = len(samples)
-    final_score = equality_score or combined_score or singleton_score or base
+    final_score = equality_score or numeric_score or combined_score or singleton_score or base
     result = {
         "formula_exact_count": base["exact"],
         "formula_exact": base["exact"] / total,
@@ -571,6 +605,8 @@ def _score_finalized(
             "formula_layout": audit["formula_layout"],
             "singleton_shape": singleton_audit,
             "restricted_product_fusion_finalizer": restricted_fusion_audit,
+            "dual_numeric_auxiliary_finalizer": numeric_finalizer_audit,
+            "dual_numeric_rescue": numeric_audit,
             "formula_placement": placement_audit,
             "straight_equality": equality_audit,
         },
@@ -596,6 +632,13 @@ def _score_finalized(
             "combined_improved": combined_improved,
             "combined_regressed": combined_regressed,
             "combined_singleton_audit": combined_audit,
+        })
+    if numeric_score is not None:
+        result.update({
+            "dual_numeric_formula_exact_count": numeric_score["exact"],
+            "dual_numeric_formula_exact": numeric_score["exact"] / total,
+            "dual_numeric_improved": numeric_improved,
+            "dual_numeric_regressed": numeric_regressed,
         })
     if auxiliary_rows is not None and placement_score is not None and equality_score is not None:
         result.update({
@@ -775,6 +818,9 @@ def main() -> int:
         configuration = validate_singleton_configuration(
             PRODUCT_SINGLETON_CONFIGURATION,
         )
+        numeric_configuration = validate_dual_numeric_configuration(
+            PRODUCT_DUAL_NUMERIC_CONFIGURATION,
+        )
         singleton_probability = _probabilities(
             singleton_hwr.math_head, embeddings, device,
         )
@@ -789,11 +835,13 @@ def main() -> int:
             "policy": configuration["auxiliary_policy"],
             "weight": singleton_weight,
             "configuration": configuration,
+            "numeric_configuration": numeric_configuration,
         }
         singleton_contract = {
             "enabled": True,
             "rescue_schema": SINGLETON_SCHEMA,
             "configuration": configuration,
+            "numeric_configuration": numeric_configuration,
             "auxiliary_hwr_checkpoint_sha256": _sha256(singleton_hwr_path),
             "current_96_formula_training_overlap": True,
         }

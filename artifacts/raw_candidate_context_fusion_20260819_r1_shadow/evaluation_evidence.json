@@ -1,6 +1,6 @@
 {
   "schema": "aiflow-raw-candidate-context-fusion-evaluation/v1",
-  "generated_at": "2026-08-19T15:03:44.7756390Z",
+  "generated_at": "2026-08-19T15:20:09.3213452Z",
   "status": "development_only_posthoc_shadow",
   "protocol": {
     "dataset_formulas": 96,
@@ -25,40 +25,49 @@
     "singleton_only_formula_exact": {"count": 39, "total": 49},
     "restricted_fusion_only_formula_exact": {"count": 39, "total": 49},
     "combined_formula_exact": {"count": 40, "total": 49, "rate": 0.8163265306122449},
-    "original_top5_formula_oracle": {"count": 41, "total": 49}
+    "dual_hwr_numeric_formula_exact": {"count": 41, "total": 49, "rate": 0.8367346938775511},
+    "original_top5_formula_oracle": {"count": 41, "total": 49},
+    "dual_hwr_top5_union_formula_oracle": {"count": 46, "total": 49}
   },
   "comparison": {
     "singleton_improved": ["aiflow_0049"],
     "restricted_fusion_improved": ["aiflow_0078"],
     "combined_improved": ["aiflow_0049", "aiflow_0078"],
-    "combined_regressed": []
+    "combined_regressed": [],
+    "dual_numeric_improved": ["aiflow_0049", "aiflow_0052", "aiflow_0078"],
+    "dual_numeric_regressed": []
   },
   "remaining": {
     "grouping_failure": ["aiflow_0010"],
-    "truth_outside_original_top5": [
-      "aiflow_0004",
+    "truth_outside_dual_hwr_top5_union": [
       "aiflow_0046",
-      "aiflow_0052",
+      "aiflow_0064"
+    ],
+    "unresolved_inside_dual_hwr_top5_union": [
+      "aiflow_0004",
       "aiflow_0056",
       "aiflow_0058",
       "aiflow_0061",
-      "aiflow_0064"
-    ],
-    "unresolved_without_formula_context": ["aiflow_0072"]
+      "aiflow_0072"
+    ]
   },
   "contracts": {
     "target_label_writer_or_target_count_input": false,
     "all_strokes_exactly_once": true,
-    "original_top5_candidate_set_preserved": true,
-    "new_tokens": 0,
+    "restricted_context_original_top5_candidate_set_preserved": true,
+    "dual_numeric_candidate_contract": "baseline_and_auxiliary_top5_union",
+    "dual_numeric_maximum_operand_to_digit_changes": 2,
+    "baseline_top5_expansions": 1,
+    "tokens_outside_dual_hwr_union": 0,
     "deleted_glyphs": 0,
     "grouping_mutations": 0,
-    "arithmetic_solver": false,
+    "operator_relation_or_fence_mutations": 0,
+    "arithmetic_evaluation": false,
     "product_default_enabled": false
   },
   "full_local_probe": {
-    "path": "artifacts/partition_context_ranker_20260820_r17_candidate_context_final_probe/partition_context_ranker_summary.json",
-    "sha256": "3fa93f8423d97382e4a559c1b856716c154826b2ea246489f283d0e810831366",
+    "path": "artifacts/partition_context_ranker_20260820_r18_dual_numeric_probe/partition_context_ranker_summary.json",
+    "sha256": "b3f8e3789226173798470312991e3019295caa71e1ea9509cc3e2da319dd0ee3",
     "selected_artifact": false
   }
 }

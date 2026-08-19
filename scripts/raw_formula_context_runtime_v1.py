@@ -24,6 +24,10 @@ import torch
 
 from evaluate_48hz_prefix_v1 import DEFAULT_PRODUCT, _load_model, _sha256
 from evaluate_joint_hwr_grouping_v1 import _candidate_embeddings, _probabilities
+from dual_hwr_numeric_rescue_v1 import (
+    apply_dual_hwr_numeric_rescue,
+    validate_configuration as validate_dual_numeric_configuration,
+)
 from evaluate_partition_context_ranker_v1 import (
     FEATURE_NAMES, POSTHOC_DESIGN_GUARD, SCHEMA as RANKER_SCHEMA,
     _attach_features, _auxiliary_rows, _gate_accept, _geometry_selection,
@@ -137,6 +141,7 @@ class RawFormulaContextRuntimeV1:
     partition_ranker_sha256: str
     singleton_hwr: Any | None
     singleton_configuration: dict[str, Any] | None
+    numeric_configuration: dict[str, Any] | None
     singleton_config_sha256: str | None
     singleton_hwr_sha256: str | None
 
@@ -217,6 +222,7 @@ class RawFormulaContextRuntimeV1:
             )
         singleton_hwr = None
         singleton_configuration = None
+        numeric_configuration = None
         singleton_config_sha256 = None
         singleton_hwr_sha256 = None
         if candidate_context_fusion_config is not None:
@@ -236,6 +242,7 @@ class RawFormulaContextRuntimeV1:
             mode = dict(singleton_payload.get("mode") or {})
             rerank_mode = dict(mode.get("restricted_candidate_rerank") or {})
             singleton_mode = dict(mode.get("singleton_shape_rescue") or {})
+            numeric_mode = dict(mode.get("dual_numeric_rescue") or {})
             if (
                 singleton_payload.get("schema") != CANDIDATE_FUSION_CONFIG_SCHEMA
                 or singleton_payload.get("rescue_schema") != SINGLETON_SCHEMA
@@ -251,6 +258,13 @@ class RawFormulaContextRuntimeV1:
                 or singleton_mode != {
                     "enabled": True,
                     "preserve_original_candidate_set": True,
+                }
+                or numeric_mode != {
+                    "enabled": True,
+                    "maximum_operand_changes": 2,
+                    "candidate_contract": "baseline_and_auxiliary_top5_union",
+                    "operator_relation_or_fence_mutations": 0,
+                    "arithmetic_evaluation": False,
                 }
             ):
                 raise ValueError("candidate context fusion shadow contract mismatch")
@@ -277,8 +291,18 @@ class RawFormulaContextRuntimeV1:
             singleton_configuration = validate_singleton_configuration(
                 dict(singleton_payload.get("configuration") or {}),
             )
+            numeric_configuration = validate_dual_numeric_configuration(
+                dict(singleton_payload.get("numeric_configuration") or {}),
+            )
             if singleton_configuration["auxiliary_policy"] != "old_new_product_probability_fusion":
                 raise ValueError("candidate context fusion policy mismatch")
+            if (
+                numeric_configuration["auxiliary_policy"]
+                != singleton_configuration["auxiliary_policy"]
+                or numeric_configuration["auxiliary_weight"]
+                != singleton_configuration["auxiliary_weight"]
+            ):
+                raise ValueError("candidate context fusion numeric policy mismatch")
             singleton_hwr, singleton_labels, _ = _load_model(
                 singleton_hwr_path, resolved_device,
             )
@@ -300,7 +324,8 @@ class RawFormulaContextRuntimeV1:
         )
         return cls(
             payload, hwr, labels, finalizer, resolved_device, _sha256(ranker_path),
-            singleton_hwr, singleton_configuration, singleton_config_sha256,
+            singleton_hwr, singleton_configuration, numeric_configuration,
+            singleton_config_sha256,
             singleton_hwr_sha256,
         )
 
@@ -398,6 +423,13 @@ class RawFormulaContextRuntimeV1:
                 runtime_rows, finalized, singleton_rows,
                 self.singleton_configuration,
             )
+            auxiliary_finalized, auxiliary_finalizer_audit = self.finalizer.finalize(
+                singleton_rows,
+            )
+            finalized, numeric_audit = apply_dual_hwr_numeric_rescue(
+                finalized, singleton_rows, auxiliary_finalized,
+                self.numeric_configuration,
+            )
             singleton_audit = {
                 **singleton_audit,
                 "restricted_candidate_rerank": {
@@ -406,6 +438,8 @@ class RawFormulaContextRuntimeV1:
                     "candidate_width": 5,
                     "formula_context_finalizer_reapplied": True,
                 },
+                "dual_numeric_auxiliary_finalizer": auxiliary_finalizer_audit,
+                "dual_numeric_rescue": numeric_audit,
             }
         else:
             finalized, finalizer_audit = self.finalizer.finalize(runtime_rows)

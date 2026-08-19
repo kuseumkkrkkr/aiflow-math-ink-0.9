@@ -1,50 +1,61 @@
 {
   "schema": "aiflow-raw-candidate-context-fusion-runtime-manifest/v1",
-  "generated_at": "2026-08-19T15:03:44.7756390Z",
+  "generated_at": "2026-08-19T15:25:40.3621641Z",
   "status": "development_only_posthoc_shadow",
   "shadow_runtime_admitted": true,
   "product_default_admitted": false,
   "configuration": {
     "path": "artifacts/raw_candidate_context_fusion_20260819_r1_shadow/candidate_context_fusion_runtime_config.json",
-    "sha256": "191b6e2403dbb6e78f5880d6d339ea7a62ee9f4402132ae9a22d6e7fc041c63a"
+    "sha256": "4479027b96551e917773b5b105d166aa36d99c568246371a5e9a5d50e5b2ffaa"
   },
   "selected_summary": {
     "path": "artifacts/raw_candidate_context_fusion_20260819_r1_shadow/selected_summary.json",
-    "sha256": "e2ef776ee407450b63866d6adbad7f2fb1c71682ca5627091d391974caa14f2c"
+    "sha256": "2de232caddd797bc90793a409bec4a4b042c667ab7a9c33b169d486f3b49ab6e"
   },
   "evaluation_evidence": {
     "path": "artifacts/raw_candidate_context_fusion_20260819_r1_shadow/evaluation_evidence.json",
-    "sha256": "c74cd704e9e0f73be6d3ec81d144f04080d0f8908b0fdbbcffa4e34e519c3904"
+    "sha256": "2917b40230da88ada8b0bb0bcacabaea5232343cf52f42c7969c61605fe2f7df"
   },
   "runtime_contract": {
-    "authoritative_candidates": "original frozen HWR Top-5",
-    "auxiliary_operation": "probability reranking only",
+    "restricted_context_candidates": "original frozen HWR Top-5",
+    "dual_numeric_candidates": "baseline and admitted auxiliary HWR Top-5 union",
+    "auxiliary_operation": "probability reranking plus gated operand-to-digit rescue",
     "formula_context_finalizer_reapplied": true,
     "singleton_shape_tokens": ["/", "\\times"],
+    "dual_numeric_maximum_operand_changes": 2,
     "all_strokes_exactly_once": true,
-    "new_tokens": 0,
+    "tokens_outside_admitted_candidate_contract": 0,
     "deleted_glyphs": 0,
     "grouping_mutations": 0,
-    "arithmetic_solver": false
+    "operator_relation_or_fence_mutations": 0,
+    "arithmetic_evaluation": false
   },
   "metrics": {
     "chronological_49": {
       "baseline_formula_exact_count": 38,
-      "challenger_formula_exact_count": 40,
-      "challenger_formula_exact": 0.8163265306122449,
-      "improved_formula_ids": ["aiflow_0049", "aiflow_0078"],
+      "challenger_formula_exact_count": 41,
+      "challenger_formula_exact": 0.8367346938775511,
+      "improved_formula_ids": ["aiflow_0049", "aiflow_0052", "aiflow_0078"],
       "regressed_formula_ids": [],
-      "original_top5_oracle_count": 41
+      "original_top5_oracle_count": 41,
+      "dual_hwr_top5_union_oracle_count": 46
     },
     "raw_runtime": {
       "formulas": 159,
-      "chronological_test_exact_count": 40,
+      "chronological_test_exact_count": 41,
       "chronological_test_total": 49,
+      "accepted_ownership_exact_count": 86,
+      "accepted_ownership_total": 96,
+      "all_valid_prompt_exact_count": 126,
+      "all_valid_prompt_total": 159,
+      "improved_over_previous_runtime": ["aiflow_0052", "aiflow_0090"],
+      "regressed_over_previous_runtime": [],
       "all_exact_stroke_cover": true,
-      "all_candidate_preserving": true,
+      "all_tokens_inside_admitted_candidate_contract": true,
       "all_inserted_or_deleted_glyphs_zero": true,
+      "all_operator_relation_or_fence_mutations_zero": true,
       "all_product_defaults_disabled": true,
-      "output_sha256": "7742ab42aa44a1abcc0b570fe4f9a38301362aac6a1bd3bb18ed12da7293979b"
+      "output_sha256": "876b9ec3e5b4f0445324aa9c1b2840cced25d1a737980f4fa4072e1868405868"
     }
   },
   "code": {
