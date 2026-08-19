@@ -120,3 +120,7 @@ Google BERT-Tiny에 372개 문자 token과 7개 공간관계 token을 추가한 
 ### Top-10 문맥 신경망 재배치 감사
 
 고정된 자체 수식 문맥 신경망으로 Top-10 후보를 전면 재정렬하면 직접 수집 식 완전일치가 78/95에서 61/95로, CROHME 반복 진단이 288/984에서 272/984로 하락했다. `X→x`만 허용한 분기도 직접 수집 1식은 고쳤지만 CROHME 문자에서 개선 1건·회귀 3건이어서 기각했다. 런타임은 변경하지 않았으며 근거는 [reports/WIDE_CONTEXT_TOP10_PROBE_REJECTION_20260819.md](reports/WIDE_CONTEXT_TOP10_PROBE_REJECTION_20260819.md)에 기록했다.
+
+### Top-20 짝 없는 괄호 피연산자 복원
+
+Top-20은 후보 회수 상한을 직접 수집 88/95에서 91/95로 넓혔지만 전체 문맥 재정렬과 낮은 확률 후보 허용은 회귀 때문에 기각했다. 대신 이항 연산자와 관계 기호 사이의 짝 없는 닫는 괄호가 단일 세로 stroke이고 후보의 유일한 숫자가 `1`일 때만 복원하는 배치 가드를 추가했다. 직접 수집은 문자 359/387(92.76%), 식 완전일치 79/95(83.16%)가 됐고 CROHME 반복 진단은 변경·회귀가 모두 0건이다. 반복 개발 자료에서 정한 경계이므로 `shadow_runtime_only`이며 상세 근거는 [reports/TOP20_UNMATCHED_FENCE_PLACEMENT_LOOP_20260819.md](reports/TOP20_UNMATCHED_FENCE_PLACEMENT_LOOP_20260819.md)에 기록했다.
