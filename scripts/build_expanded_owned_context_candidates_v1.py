@@ -3,8 +3,8 @@
 
 Legacy writers use their frozen held-writer HWR heads. Writers absent from the
 legacy ownership set use the frozen product HWR checkpoint, which has never
-seen those writers. The output remains a Top-5 candidate cache; no context
-training is performed here.
+seen those writers. Top-5 remains the runtime default; wider candidate caches
+are research-only recall audits. No context training is performed here.
 """
 
 from __future__ import annotations
@@ -168,7 +168,10 @@ def _score_fused(
     items: list[dict], base, labels: list[str], base_path: Path,
     loo_path: Path, product_path: Path, expanded_loo_path: Path,
     weight: float, device: torch.device, batch_size: int = 512,
+    top_k: int = 5,
 ) -> tuple[dict[str, dict], dict]:
+    if not 1 <= top_k <= len(labels):
+        raise ValueError("fusion Top-k is outside the HWR vocabulary")
     current_heads = _load_loo_heads(loo_path, base_path, labels, device)
     expanded_heads = _load_loo_heads(expanded_loo_path, base_path, labels, device)
     product, product_labels, _ = _load_model(product_path, device)
@@ -222,7 +225,7 @@ def _score_fused(
             (1.0 - weight) * current_logits.softmax(dim=1)
             + weight * expanded_logits.softmax(dim=1)
         )
-        values, indices = probabilities.topk(5, dim=1)
+        values, indices = probabilities.topk(top_k, dim=1)
         for row, token_indices, token_probabilities in zip(
             batch, indices.cpu().tolist(), values.cpu().tolist(), strict=True,
         ):
@@ -237,6 +240,7 @@ def _score_fused(
         "expanded_writer_loo_heads_sha256": _sha256(expanded_loo_path),
         "scoring_policy": "current_expanded_writer_loo_probability_fusion",
         "expanded_writer_loo_weight": weight,
+        "top_k": top_k,
         "labels": len(labels),
     }
 
@@ -244,7 +248,7 @@ def _score_fused(
 def _score(
     items: list[dict], base_path: Path, loo_path: Path, product_path: Path,
     device: torch.device, expanded_loo_path: Path | None = None,
-    expanded_loo_weight: float | None = None,
+    expanded_loo_weight: float | None = None, top_k: int = 5,
 ) -> tuple[dict[str, dict], dict, list[str]]:
     if expanded_loo_weight is not None and expanded_loo_path is None:
         raise ValueError("expanded LOO fusion weight requires expanded LOO heads")
@@ -254,7 +258,7 @@ def _score(
     if expanded_loo_path is not None and expanded_loo_weight is not None:
         scores, checkpoints = _score_fused(
             items, base, base_labels, base_path, loo_path, product_path,
-            expanded_loo_path, expanded_loo_weight, device,
+            expanded_loo_path, expanded_loo_weight, device, top_k=top_k,
         )
         return scores, checkpoints, base_labels
     if expanded_loo_path is not None:
@@ -376,6 +380,10 @@ def main() -> int:
         "--expanded-loo-weight", type=float,
         help="probability weight for expanded LOO heads; requires --expanded-loo-heads",
     )
+    parser.add_argument(
+        "--top-k", type=int, default=5,
+        help="research candidate width; values above 5 require probability fusion",
+    )
     parser.add_argument("--product-checkpoint", type=Path, default=DEFAULT_PRODUCT)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
@@ -391,6 +399,10 @@ def main() -> int:
         parser.error("--expanded-loo-weight requires --expanded-loo-heads")
     if args.expanded_loo_weight is not None and not 0.0 <= args.expanded_loo_weight <= 1.0:
         parser.error("--expanded-loo-weight must be in [0,1]")
+    if not 1 <= args.top_k <= 20:
+        parser.error("--top-k must be in [1,20]")
+    if args.top_k != 5 and args.expanded_loo_weight is None:
+        parser.error("--top-k values other than 5 require --expanded-loo-weight")
     candidate_root = _d_path(args.dataset_root, "expanded dataset")
     legacy_root = _d_path(args.legacy_dataset_root, "legacy dataset")
     output = _d_path(args.output, "candidate cache")
@@ -419,6 +431,7 @@ def main() -> int:
         device,
         expanded_loo_path,
         args.expanded_loo_weight,
+        args.top_k,
     )
     items, raw_strokes, scores, admission = _admit_supported_formulas(
         items, hwr_labels, raw_strokes, scores
@@ -443,6 +456,7 @@ def main() -> int:
         )
         if args.expanded_loo_weight is not None:
             row["hwr_fusion_weight"] = float(args.expanded_loo_weight)
+            row["hwr_candidate_width"] = int(args.top_k)
         row["evaluation_partition"] = item["evaluation_partition"]
     _write_rows(output, rows)
     report = {
@@ -461,6 +475,7 @@ def main() -> int:
             {
                 "mode": "current and expanded writer-LOO probability fusion",
                 "expanded_writer_loo_weight": float(args.expanded_loo_weight),
+                "top_k": int(args.top_k),
                 "held_writer_excluded_from_expanded_head_training": True,
             }
             if args.expanded_loo_weight is not None else (
