@@ -21,6 +21,7 @@ import torch
 
 from character_tensor_v1 import _json_lines
 from evaluate_48hz_prefix_v1 import DEFAULT_PRODUCT, _sha256
+from context_recheck_guard_v1 import apply_context_recheck_guard
 from semantic_equation_guard_v2 import apply_semantic_equation_guard_v2
 from semantic_fence_guard_v1 import apply_semantic_fence_guard
 from semantic_infix_guard_v1 import apply_semantic_infix_guard
@@ -82,12 +83,15 @@ def _runtime_rows(rows: list[dict], labels: set[str]) -> list[dict]:
 
 def _decision_metadata(
     row: dict, hwr: str, context_token: str, equation_token: str,
-    fence_token: str, final_token: str, supported_exact: bool = False,
+    fence_token: str, first_final_token: str, final_token: str,
+    supported_exact: bool = False,
 ) -> tuple[bool, str, str]:
     context_available = int(row["context"]["length"]) > 1
     if not context_available:
         source = "context_prior_only" if final_token != hwr else "hwr_top1_no_context"
-    elif final_token != fence_token:
+    elif final_token != first_final_token:
+        source = "context_recheck_guard_v1"
+    elif first_final_token != fence_token:
         source = "semantic_infix_guard"
     elif fence_token != equation_token:
         source = "semantic_fence_guard"
@@ -157,16 +161,45 @@ class OwnedFormulaContextFinalizer:
                 runtime_rows, fence_predictions,
                 probability_ratio_floor,
             )
+            first_predictions = predictions
+            recheck_context, recheck_model_audit = (
+                decide_owned_formula_rows_supported_exact(
+                    self.model, self.contract, self.payload, runtime_rows,
+                    self.device, self.batch_size, first_predictions,
+                )
+            )
+            recheck_equation, recheck_equation_audit = (
+                apply_semantic_equation_guard_v2(
+                    runtime_rows, recheck_context, probability_ratio_floor
+                )
+            )
+            recheck_fence, recheck_fence_audit = apply_semantic_fence_guard(
+                runtime_rows, recheck_equation
+            )
+            recheck_predictions, recheck_infix_audit = apply_semantic_infix_guard(
+                runtime_rows, recheck_fence, probability_ratio_floor
+            )
+            predictions, recheck_audit = apply_context_recheck_guard(
+                runtime_rows, first_predictions, recheck_predictions
+            )
             semantic_audit = {
                 "enabled": True,
                 "equation": equation_audit,
                 "fence": fence_audit,
                 "infix": infix_audit,
+                "recheck": {
+                    "model": recheck_model_audit,
+                    "equation": recheck_equation_audit,
+                    "fence": recheck_fence_audit,
+                    "infix": recheck_infix_audit,
+                    "guard": recheck_audit,
+                },
             }
         else:
             equation_predictions = context_predictions
             fence_predictions = context_predictions
             predictions = context_predictions
+            first_predictions = predictions
             semantic_audit = {"enabled": False}
         output = []
         for row in runtime_rows:
@@ -180,6 +213,7 @@ class OwnedFormulaContextFinalizer:
                 str(context_predictions[record_id]),
                 str(equation_predictions[record_id]),
                 str(fence_predictions[record_id]),
+                str(first_predictions[record_id]),
                 prediction,
                 record_id in supported_exact_records,
             )
@@ -208,6 +242,7 @@ class OwnedFormulaContextFinalizer:
                     "semantic_equation_guard_v2",
                     "semantic_fence_guard_v1",
                     "semantic_infix_guard_v1",
+                    "context_recheck_guard_v1",
                 ]
                 if self.semantic_guards else []
             ),
@@ -245,16 +280,19 @@ def _self_test() -> None:
     clean = _runtime_rows(rows, labels)
     assert "label" not in clean[0]
     assert clean[0]["final_topk"] == ["1", "+"]
-    assert _decision_metadata(clean[0], "1", "+", "+", "+", "+") == (
+    assert _decision_metadata(clean[0], "1", "+", "+", "+", "+", "+") == (
         False, "ambiguous_no_formula_context", "context_prior_only",
     )
     contextual = {**clean[0], "context": {"index": 1, "length": 3}}
-    assert _decision_metadata(contextual, "1", "1", "1", "1", "+") == (
+    assert _decision_metadata(contextual, "1", "1", "1", "1", "+", "+") == (
         True, "finalized", "semantic_infix_guard",
     )
     assert _decision_metadata(
-        contextual, "h", "b", "b", "b", "b", True
+        contextual, "h", "b", "b", "b", "b", "b", True
     ) == (True, "finalized", "owned_supported_exact_context_guard")
+    assert _decision_metadata(
+        contextual, "x", r"\times", r"\times", r"\times", r"\times", "x"
+    ) == (True, "finalized", "context_recheck_guard_v1")
     try:
         _runtime_rows([{**rows[0], "final_topk": ["1", "x"]}], labels)
     except ValueError:

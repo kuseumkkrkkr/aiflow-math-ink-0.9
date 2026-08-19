@@ -36,3 +36,13 @@ formula grouping, stroke ownership, spatial relations, or final LaTex output.
 
 The all-source character-label union is 403 labels. It is an audit count, not
 the deployed mathematical output dimension.
+
+## Formula-context finalizer
+
+- Input: immutable HWR Top-5 candidates, probabilities, formula order, and seven spatial relations.
+- Context encoder: owned 2-layer Transformer, hidden width 128, two attention heads.
+- First pass: role/class context score plus HWR shape score, owned role grammar, and deterministic equation/fence/infix guards.
+- Second pass: re-read the first finalized formula as MASK context.
+- Recheck policy: only retract a first-pass override back to HWR Top-1; never introduce a new candidate choice.
+- Contract: candidate preservation 100%, no token creation, deletion, or stroke regrouping.
+- Current status: opt-in shadow; commercial accuracy gate remains open until untouched project-owned `|` and `o` formulas pass.

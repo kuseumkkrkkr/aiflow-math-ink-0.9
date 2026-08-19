@@ -18,6 +18,8 @@ HWR 372-head ──> Top-5 문자·확률
 형상 확률 경계 ──> 기존 Top-5 중 하나만 확정
 ```
 
+현재 실행기는 1차 확정열을 주변 token으로 넣어 같은 MASK 문맥 모델을 한 번 더 읽는다. 2차 pass는 새 후보를 확정할 수 없으며, 1차 문맥 보정을 HWR Top-1으로 되돌리라는 결과만 받아들인다. 이 보수적 재검토는 직접수집 결과를 바꾸지 않고 CROHME의 `\times→x` 오보정 1건을 복구했다.
+
 ## 모델과 경계
 
 | 항목 | 확정값 |
@@ -79,6 +81,9 @@ HWR 372-head ──> Top-5 문자·확률
 ## 산출물과 재현
 
 - 구현: `scripts/train_owned_formula_context_v1.py`
+- 제품 최종기: `scripts/finalize_formula_context_v1.py`
+- 2-pass 복귀 경계: `scripts/context_recheck_guard_v1.py`
+- 고정 체크포인트 평가기: `scripts/evaluate_owned_formula_context_checkpoint_v1.py`
 - 공통 후보 결합·형상 경계: `scripts/train_context_decision_layer_v1.py`
 - 최종 로컬 실행: `artifacts/owned_formula_context_20260822_r6`
 - 체크포인트: `owned_formula_context_product.pt`

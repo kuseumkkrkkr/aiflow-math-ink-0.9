@@ -95,18 +95,28 @@ r6은 각 글자를 문맥으로 재정렬하지만 수식 전체가 실제로 �
 
 고정 체크포인트의 216개 가중치·margin 조합을 비교했을 때 기존 r6 설정은 검토 지표에서 회귀 차원이 0인 유일한 설정이었다. exact-context scale만 2.0으로 높이는 안은 직접수집 두 글자를 고쳤지만 strict macro와 CROHME 개별 예측이 후퇴해 기각했다. 대신 위 지원 가드로 잠그자 직접 `h→b`, CROHME `v→b`를 각각 1건 바로잡고 두 범위 모두 회귀 0건을 유지했다.
 
-추가 탈출구도 같은 고정 평가에서 검토했다. 두 개 이상의 비산술 슬롯을 한꺼번에 숫자로 바꾸는 규칙은 직접 수집을 하나도 고치지 못하고 반복 관찰한 CROHME 한 식만 고쳐 채택하지 않았다. 대소문자 일치 규칙은 `X≠y→x≠y`를 고쳤지만 정당한 대문자 변수와 `0·O·o`를 훼손할 수 있어 채택하지 않았다. `5/0→5-0`은 직접 한 글자를 고쳤지만 0으로 나누는 입력 자체도 사용자가 쓰려는 유효한 문자열이므로 의미를 강제하지 않았다. 문법 유효성만 강제한 기존 가설과 r6 결과를 다시 넣는 2회 추론도 각각 회귀 또는 효과 부족으로 기각했다.
+추가 탈출구도 같은 고정 평가에서 검토했다. 두 개 이상의 비산술 슬롯을 한꺼번에 숫자로 바꾸는 규칙은 직접 수집을 하나도 고치지 못하고 반복 관찰한 CROHME 한 식만 고쳐 채택하지 않았다. 대소문자 일치 규칙은 `X≠y→x≠y`를 고쳤지만 정당한 대문자 변수와 `0·O·o`를 훼손할 수 있어 채택하지 않았다. `5/0→5-0`은 직접 한 글자를 고쳤지만 0으로 나누는 입력 자체도 사용자가 쓰려는 유효한 문자열이므로 의미를 강제하지 않았다. 문법 유효성만 강제한 기존 가설과 2차 pass가 새로운 후보까지 확정하도록 허용한 반복 추론도 각각 회귀 또는 근거 없는 변경이 생겨 기각했다.
 
 실제 HWR Top-1 오인식을 프로젝트 truth별로 재표집해 합성 문맥에 넣은 노이즈 학습도 시험했다. 신규 48식의 제품 예측은 r6과 완전히 같고 CROHME Top-1은 77.82%→77.84%에 그쳤지만, 프로젝트 writer-LOO Top-1은 89.10%→88.15%, 수식 exact는 65.96%→61.70%로 내려가 체크포인트와 학습 코드 모두 채택하지 않았다. 실험 산출물은 로컬 `artifacts/owned_formula_context_20260819_noise_r1`에만 남겼다.
 
-- 최종 평가: `D:\AIFlow-Workspace\PrivateData\math-ink-data-collector\derived\context-candidates-20260819-r3\r6_semantic_eval_r9.json`
-- 평가 SHA-256: `e2984c631ff846dfff71dcb594f1539d4ae90070279f400dae8ab360f98a3de1`
-- 정답 없는 GPU 런타임: `D:\AIFlow-Workspace\PrivateData\math-ink-data-collector\derived\context-candidates-20260819-r3\runtime-r6-semantic-r10.jsonl.gz`, SHA-256 `14bb47868f2e999d06e9cc0fad2b00ce62f274204b847d85b22f08479f207642`
-- 정답 없는 CPU 런타임: `D:\AIFlow-Workspace\PrivateData\math-ink-data-collector\derived\context-candidates-20260819-r3\runtime-r6-semantic-cpu-r6.jsonl.gz`, SHA-256 `79a8bffe011966064f262c99adb12a0c6de4fffbbceb5bafed05845839a5eb71`
-- CROHME 런타임: `D:\AIFlow-Workspace\PrivateData\math-ink-data-collector\derived\context-candidates-20260819-r3\runtime-crohme-r6-semantic-r3.jsonl.gz`, SHA-256 `fd71d201a1b2ab1b718ccc37182ff6de83521c136b00f4ae3a7f05fb03ff2190`
+- 최종 평가: `D:\AIFlow-Workspace\PrivateData\math-ink-data-collector\derived\context-candidates-20260819-r3\r6_semantic_eval_r10.json`
+- 평가 SHA-256: `eaef1c1295d9b31664e98b3dc18c32f284042ab01a4161054c997689d2a631e3`
+- 정답 없는 GPU 런타임: `D:\AIFlow-Workspace\PrivateData\math-ink-data-collector\derived\context-candidates-20260819-r3\runtime-r6-semantic-r11.jsonl.gz`, SHA-256 `0d37178b6be72f196a3e86eee5b8c6ada603510e6b1cc001eeba4e4a334ef2cd`
+- 정답 없는 CPU 런타임: `D:\AIFlow-Workspace\PrivateData\math-ink-data-collector\derived\context-candidates-20260819-r3\runtime-r6-semantic-cpu-r7.jsonl.gz`, SHA-256 `e1c2de129dad8e8dde68687620e62a3013412bfd735acfff530a9b409a4259e9`
+- CROHME 런타임: `D:\AIFlow-Workspace\PrivateData\math-ink-data-collector\derived\context-candidates-20260819-r3\runtime-crohme-r6-semantic-r4.jsonl.gz`, SHA-256 `5b713a37fae519f35b96638772c9a8e29e94093d2ad71d52368f6a2fb9fd7c83`
 - 런타임·평가 예측 불일치 0건, CPU·GPU 예측 불일치 0건, 런타임 `label` 필드 0건
 
-## r9 잔여 오답 탈출구 감사
+## r10 2-pass 문맥 재검토
+
+1차 최종열을 주변 token으로 넣어 같은 MASK 문맥 모델과 의미 가드를 한 번 더 실행했다. 제약 없는 2차 결과는 CROHME에서 `σ→8`이라는 근거 없는 새 변경을 만들었으므로 채택하지 않았다. 최종 `context_recheck_guard_v1`은 2차 결과가 1차 문맥 보정을 원래 HWR Top-1로 되돌릴 때만 복구하고, 다른 새 변경은 무시한다.
+
+- 직접수집 387글자: 변경 0, Top-1 88.89%, 수식 exact 70.53%, 회귀 0
+- 신규수집 176글자: 변경 0, Top-1 85.80%, 수식 exact 66.67%, 회귀 0
+- CROHME 9,535글자: `507_em_68.inkml:4`의 `\times→x` 1개 복구, 회귀 0
+- CROHME Top-1: 78.1017%→78.1122%; 수식 exact는 28.5569%로 동일
+- 2차 불일치 2건 중 HWR Top-1 복귀 1건만 채택, 새로운 후보 변경 1건은 차단
+
+## r10 잔여 오답 탈출구 감사
 
 최종 387글자 중 오답은 43개다. 이 가운데 25개는 정답이 HWR Top-5에 없어 후보 보존 문맥 레이어가 복구할 수 없다. 나머지 18개에는 길이 1의 고립 기호와 `x/χ`, `b/h`, `x/X`처럼 수식 문법만으로 확정할 수 없는 같은 역할의 형상 동형이 남는다. 전체 Top-5 ceiling은 93.54%다.
 
@@ -114,7 +124,7 @@ r6은 각 글자를 문맥으로 재정렬하지만 수식 전체가 실제로 �
 - `5 4 4→5+4` 규칙은 같은 슬롯 Top-5에 `+`와 `÷`가 함께 있어 문맥 후보가 유일하지 않으므로 채택하지 않았다.
 - 길이 1을 HWR Top-1로 강제 복귀하면 직접 수집 정답 1개가 깨졌다. 예측은 유지하고 맥락 부재 상태만 노출한다.
 
-따라서 지원 기반 exact-context 가드까지 적용한 뒤 현재 후보 집합 안에서 직접·신규·CROHME 비회귀와 일반 수학 의미 보존을 함께 만족하는 추가 Top-1 규칙은 없다. 다음 정확도 상승은 HWR Top-5 밖 25개를 줄이는 형상 후보 개선과, `|·o`를 포함한 새 프로젝트 소유 untouched 수식 맥락이 필요하다.
+따라서 2-pass 문맥 재검토까지 적용한 뒤 현재 후보 집합 안에서 직접·신규·CROHME 비회귀와 일반 수학 의미 보존을 함께 만족하는 추가 Top-1 규칙은 없다. 다음 정확도 상승은 HWR Top-5 밖 25개를 줄이는 형상 후보 개선과, `|·o`를 포함한 새 프로젝트 소유 untouched 수식 맥락이 필요하다.
 
 ## 정답 없는 제품 추론 경계
 
@@ -146,11 +156,11 @@ python scripts\finalize_formula_context_v1.py `
   --device cpu
 ```
 
-387글자 전체에서 정답 필드를 제거한 뒤 실행한 결과, r9 최종 평가 예측과 불일치 0건, CPU·GPU 예측 및 결정 출처 불일치 0건, 후보 보존율 100%, 새 token 0, 삭제 0, grouping mutation 0을 확인했다. 지원 기반 가드가 확정한 직접수집 문자는 1개이며, 374글자는 `finalized`, 맥락이 없는 단일 글자 13개는 `ambiguous_no_formula_context`다. CROHME 9,535글자도 coverage·후보 위반·`label` 유입이 모두 0건이다.
+387글자 전체에서 정답 필드를 제거한 뒤 실행한 결과, r10 최종 평가 예측과 불일치 0건, CPU·GPU 예측 및 결정 출처 불일치 0건, 후보 보존율 100%, 새 token 0, 삭제 0, grouping mutation 0을 확인했다. 지원 기반 가드가 확정한 직접수집 문자는 1개이며, 374글자는 `finalized`, 맥락이 없는 단일 글자 13개는 `ambiguous_no_formula_context`다. CROHME 9,535글자도 coverage·후보 위반·`label` 유입이 모두 0건이다.
 
 ## 승격 조건
 
-- 현재 선택: r6 + 지원 기반 exact-context 가드 v1 + 산술 등식 가드 v2 + 잠금 괄호 가드 + 수평 중위 연산자 가드
+- 현재 선택: r6 + 지원 기반 exact-context 가드 v1 + 산술 등식 가드 v2 + 잠금 괄호 가드 + 수평 중위 연산자 가드 + 보수적 2-pass 문맥 재검토 v1
 - 현재 실행 상태: `opt-in shadow context finalizer`
 - `commercial_context_training_rights_gate_passed=true`
 - `commercial_accuracy_gate_passed=false`

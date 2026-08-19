@@ -13,6 +13,7 @@ import torch
 
 from character_tensor_v1 import _json_lines
 from evaluate_48hz_prefix_v1 import DEFAULT_PRODUCT, _sha256
+from context_recheck_guard_v1 import apply_context_recheck_guard
 from evaluate_homograph_context_reranker_v1 import _metrics
 from semantic_equation_guard_v2 import apply_semantic_equation_guard_v2
 from semantic_fence_guard_v1 import apply_semantic_fence_guard
@@ -120,15 +121,37 @@ def main() -> int:
     direct_fence, direct_fence_audit = apply_semantic_fence_guard(
         direct_rows, direct_equation
     )
-    direct_predictions, direct_infix_audit = apply_semantic_infix_guard(
+    direct_first_predictions, direct_infix_audit = apply_semantic_infix_guard(
         direct_rows, direct_fence,
         probability_ratio_floor,
+    )
+    direct_recheck_context, direct_recheck_runtime = (
+        decide_owned_formula_rows_supported_exact(
+            model, contract, payload, direct_rows, device, args.batch_size,
+            direct_first_predictions,
+        )
+    )
+    direct_recheck_equation, direct_recheck_equation_audit = (
+        apply_semantic_equation_guard_v2(
+            direct_rows, direct_recheck_context, probability_ratio_floor
+        )
+    )
+    direct_recheck_fence, direct_recheck_fence_audit = apply_semantic_fence_guard(
+        direct_rows, direct_recheck_equation
+    )
+    direct_recheck_predictions, direct_recheck_infix_audit = (
+        apply_semantic_infix_guard(
+            direct_rows, direct_recheck_fence, probability_ratio_floor
+        )
+    )
+    direct_predictions, direct_recheck_audit = apply_context_recheck_guard(
+        direct_rows, direct_first_predictions, direct_recheck_predictions
     )
     if predictions_output is not None:
         predictions_output.parent.mkdir(parents=True, exist_ok=True)
         masked._write_prediction_rows(predictions_output, direct_rows, direct_predictions)
     report = {
-        "schema": "aiflow-owned-formula-context-checkpoint-evaluation/v3",
+        "schema": "aiflow-owned-formula-context-checkpoint-evaluation/v4",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "training_performed": False,
         "runtime_pipeline": [
@@ -137,6 +160,7 @@ def main() -> int:
             "semantic_equation_guard_v2",
             "semantic_fence_guard_v1",
             "semantic_infix_guard_v1",
+            "context_recheck_guard_v1",
         ],
         "device": str(device),
         "checkpoint": {"path": str(checkpoint), "sha256": _sha256(checkpoint)},
@@ -152,6 +176,13 @@ def main() -> int:
                 "semantic_equation_guard": direct_equation_audit,
                 "semantic_fence_guard": direct_fence_audit,
                 "semantic_infix_guard": direct_infix_audit,
+                "context_recheck_model": direct_recheck_runtime,
+                "context_recheck_semantic": {
+                    "equation": direct_recheck_equation_audit,
+                    "fence": direct_recheck_fence_audit,
+                    "infix": direct_recheck_infix_audit,
+                },
+                "context_recheck_guard": direct_recheck_audit,
             },
             "evaluation": _subsets(
                 direct_rows, direct_context, direct_predictions
@@ -170,9 +201,31 @@ def main() -> int:
         crohme_fence, crohme_fence_audit = apply_semantic_fence_guard(
             crohme_rows, crohme_equation
         )
-        crohme_predictions, crohme_infix_audit = apply_semantic_infix_guard(
+        crohme_first_predictions, crohme_infix_audit = apply_semantic_infix_guard(
             crohme_rows, crohme_fence,
             probability_ratio_floor,
+        )
+        crohme_recheck_context, crohme_recheck_runtime = (
+            decide_owned_formula_rows_supported_exact(
+                model, contract, payload, crohme_rows, device, args.batch_size,
+                crohme_first_predictions,
+            )
+        )
+        crohme_recheck_equation, crohme_recheck_equation_audit = (
+            apply_semantic_equation_guard_v2(
+                crohme_rows, crohme_recheck_context, probability_ratio_floor
+            )
+        )
+        crohme_recheck_fence, crohme_recheck_fence_audit = (
+            apply_semantic_fence_guard(crohme_rows, crohme_recheck_equation)
+        )
+        crohme_recheck_predictions, crohme_recheck_infix_audit = (
+            apply_semantic_infix_guard(
+                crohme_rows, crohme_recheck_fence, probability_ratio_floor
+            )
+        )
+        crohme_predictions, crohme_recheck_audit = apply_context_recheck_guard(
+            crohme_rows, crohme_first_predictions, crohme_recheck_predictions
         )
         report["crohme"] = {
             "candidate_sha256": _sha256(crohme_path),
@@ -181,6 +234,13 @@ def main() -> int:
                 "semantic_equation_guard": crohme_equation_audit,
                 "semantic_fence_guard": crohme_fence_audit,
                 "semantic_infix_guard": crohme_infix_audit,
+                "context_recheck_model": crohme_recheck_runtime,
+                "context_recheck_semantic": {
+                    "equation": crohme_recheck_equation_audit,
+                    "fence": crohme_recheck_fence_audit,
+                    "infix": crohme_recheck_infix_audit,
+                },
+                "context_recheck_guard": crohme_recheck_audit,
             },
             "evaluation": _scope(
                 crohme_rows, crohme_context, crohme_predictions

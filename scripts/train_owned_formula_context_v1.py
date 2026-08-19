@@ -364,8 +364,9 @@ def _validation_loss(
 def _components(
     model: OwnedFormulaContext, contract: dict, rows: list[dict], grammar: dict,
     device: torch.device, batch_size: int,
+    context_tokens: dict[str, str] | None = None,
 ) -> dict:
-    packed = _pack_runtime(rows, contract)
+    packed = _pack_runtime(rows, contract, context_tokens)
     role_parts, class_parts = [], []
     model.eval()
     for start in range(0, len(rows), batch_size):
@@ -393,10 +394,23 @@ def _components(
     )
 
 
-def _pack_runtime(rows: list[dict], contract: dict) -> dict:
+def _pack_runtime(
+    rows: list[dict], contract: dict,
+    context_tokens: dict[str, str] | None = None,
+) -> dict:
     """Build masked formula inputs without requiring unavailable truth labels."""
     examples = []
     label_to_index = contract["label_to_index"]
+    record_ids = {str(row["record_id"]) for row in rows}
+    if context_tokens is not None and set(context_tokens) != record_ids:
+        raise ValueError("formula context token coverage mismatch")
+    if context_tokens is not None:
+        for row in rows:
+            record_id = str(row["record_id"])
+            if str(context_tokens[record_id]) not in row["final_topk"]:
+                raise ValueError(
+                    f"formula context token outside HWR candidates: {record_id}"
+                )
     for formula_id, sequence in masked._formulae(rows).items():
         relations = [
             masked._spatial_relation(sequence[index - 1], sequence[index])
@@ -412,7 +426,11 @@ def _pack_runtime(rows: list[dict], contract: dict) -> dict:
                     mask_position = len(ids)
                     ids.append(contract["mask_id"])
                 else:
-                    token = str(row["final_topk"][0])
+                    record_id = str(row["record_id"])
+                    token = str(
+                        context_tokens[record_id]
+                        if context_tokens is not None else row["final_topk"][0]
+                    )
                     if token not in label_to_index:
                         raise ValueError(
                             f"HWR context token outside 372 classes: {token}"
@@ -724,9 +742,11 @@ def load_owned_formula_context(
 def decide_owned_formula_rows(
     model: OwnedFormulaContext, contract: dict, payload: dict, rows: list[dict],
     device: torch.device, batch_size: int = 128,
+    context_tokens: dict[str, str] | None = None,
 ) -> tuple[dict[str, str], dict]:
     components = _components(
-        model, contract, rows, payload["role_grammar"], device, batch_size
+        model, contract, rows, payload["role_grammar"], device, batch_size,
+        context_tokens,
     )
     return context._predict(
         components,
@@ -739,9 +759,11 @@ def decide_owned_formula_rows(
 def decide_owned_formula_rows_supported_exact(
     model: OwnedFormulaContext, contract: dict, payload: dict, rows: list[dict],
     device: torch.device, batch_size: int = 128,
+    context_tokens: dict[str, str] | None = None,
 ) -> tuple[dict[str, str], dict]:
     components = _components(
-        model, contract, rows, payload["role_grammar"], device, batch_size
+        model, contract, rows, payload["role_grammar"], device, batch_size,
+        context_tokens,
     )
     baseline, audit = context._predict(
         components, payload["configuration"], payload["label_support"],
@@ -808,12 +830,25 @@ def _self_test(labels: list[str], device: torch.device) -> None:
         },
     ]
     training_pack = masked._pack(runtime_rows, contract)
-    runtime_pack = _pack_runtime(
-        [{key: value for key, value in row.items() if key != "label"} for row in runtime_rows],
-        contract,
-    )
+    runtime_clean = [
+        {key: value for key, value in row.items() if key != "label"}
+        for row in runtime_rows
+    ]
+    runtime_pack = _pack_runtime(runtime_clean, contract)
     for key in ("input_ids", "attention_mask", "mask_positions"):
         assert torch.equal(training_pack[key], runtime_pack[key])
+    rechecked_pack = _pack_runtime(
+        runtime_clean, contract, {"runtime-0": "+", "runtime-1": "1"}
+    )
+    assert not torch.equal(runtime_pack["input_ids"], rechecked_pack["input_ids"])
+    try:
+        _pack_runtime(
+            runtime_clean, contract, {"runtime-0": "x", "runtime-1": "1"}
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("context token outside HWR candidates was accepted")
     assert _aggregate_fold_configuration([
         {"selection": {"configuration": {"weight": 0.25}}},
         {"selection": {"configuration": {"weight": 1.0}}},
