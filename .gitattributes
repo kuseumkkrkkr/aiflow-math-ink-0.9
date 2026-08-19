@@ -3,6 +3,7 @@
 artifacts/raw_candidate_context_fusion_20260819_r1_shadow/*.json binary
 artifacts/raw_candidate_context_fusion_20260820_r2_nested_expression_shadow/*.json binary
 artifacts/raw_candidate_context_fusion_20260820_r3_ranked_singleton_shadow/*.json binary
+artifacts/pairwise_shape_expert_20260820_r1_shadow/*.json binary
 artifacts/formula_placement_rescue_20260819_r1_shadow/*.json text eol=lf
 artifacts/formula_placement_rescue_20260820_r2_nested_expression_shadow/*.json text eol=lf
 artifacts/straight_equality_slot_rescue_20260819_r1_shadow/*.json text eol=lf
@@ -16,4 +17,7 @@ scripts/evaluate_partition_context_ranker_v1.py text eol=lf
 scripts/raw_formula_context_runtime_v1.py text eol=lf
 scripts/latin_t_context_rescue_v1.py text eol=lf
 scripts/evaluate_repeat_merge_crohme_v1.py text eol=lf
+scripts/evaluate_pairwise_shape_runtime_v1.py text eol=lf
+scripts/pairwise_shape_rescue_v1.py text eol=lf
+scripts/train_pairwise_shape_expert_v1.py text eol=lf
 reports/RAW_STROKE_FORMULA_CONTEXT_LOOP_20260819.md text eol=lf

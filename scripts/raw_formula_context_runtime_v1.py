@@ -61,6 +61,10 @@ from singleton_shape_rescue_v1 import (
     SCHEMA as SINGLETON_SCHEMA, apply_singleton_shape_rescue,
     validate_configuration as validate_singleton_configuration,
 )
+from pairwise_shape_rescue_v1 import (
+    apply_pairwise_shape_rescue,
+    load_pairwise_shape_artifacts,
+)
 from stroke_grouping_v1 import build_lattice, candidate_features, enumerate_partitions
 from train_project_owned_grouping_v1 import Sample
 
@@ -177,6 +181,10 @@ class RawFormulaContextRuntimeV1:
     latin_hwr_sha256: str | None
     singleton_config_sha256: str | None
     singleton_hwr_sha256: str | None
+    pairwise_shape_expert: dict[str, Any] | None
+    pairwise_shape_configuration: dict[str, Any] | None
+    pairwise_shape_expert_sha256: str | None
+    pairwise_shape_config_sha256: str | None
 
     @classmethod
     def from_artifacts(
@@ -189,6 +197,8 @@ class RawFormulaContextRuntimeV1:
         formula_placement_config: Path | None = None,
         straight_equality_config: Path | None = None,
         latin_auxiliary_checkpoint: Path | None = None,
+        pairwise_shape_expert: Path | None = None,
+        pairwise_shape_config: Path | None = None,
         allow_posthoc_shadow: bool = False,
     ) -> "RawFormulaContextRuntimeV1":
         ranker_path = Path(partition_ranker).expanduser().resolve()
@@ -252,6 +262,10 @@ class RawFormulaContextRuntimeV1:
                 raise ValueError(f"{name} config hash mismatch")
         resolved_device = _device(device)
         hwr, labels, _ = _load_model(hwr_path, resolved_device)
+        if bool(pairwise_shape_expert) != bool(pairwise_shape_config):
+            raise ValueError(
+                "pairwise shape expert and configuration are required together"
+            )
         if bool(candidate_context_fusion_config) != bool(candidate_context_auxiliary_hwr_checkpoint):
             raise ValueError(
                 "candidate context fusion config and auxiliary HWR checkpoint are required together"
@@ -277,6 +291,21 @@ class RawFormulaContextRuntimeV1:
         latin_hwr_sha256 = None
         singleton_config_sha256 = None
         singleton_hwr_sha256 = None
+        pairwise_expert_payload = None
+        pairwise_configuration = None
+        pairwise_expert_sha256 = None
+        pairwise_config_sha256 = None
+        if pairwise_shape_expert is not None:
+            (
+                pairwise_expert_payload,
+                pairwise_configuration,
+                pairwise_expert_sha256,
+                pairwise_config_sha256,
+            ) = load_pairwise_shape_artifacts(
+                pairwise_shape_expert,
+                pairwise_shape_config,
+                hwr_checkpoint_sha256=_sha256(hwr_path),
+            )
         if candidate_context_fusion_config is not None:
             singleton_config_path = Path(candidate_context_fusion_config).expanduser().resolve()
             singleton_hwr_path = Path(
@@ -633,6 +662,10 @@ class RawFormulaContextRuntimeV1:
             latin_hwr, latin_labels, latin_configuration, latin_hwr_sha256,
             singleton_config_sha256,
             singleton_hwr_sha256,
+            pairwise_expert_payload,
+            pairwise_configuration,
+            pairwise_expert_sha256,
+            pairwise_config_sha256,
         )
 
     def _sample(self, source: dict[str, Any]) -> Sample:
@@ -840,6 +873,33 @@ class RawFormulaContextRuntimeV1:
             finalized, cross_lock_audit = _apply_cross_merge_token_locks(
                 finalized, {sample.sample_id: selected},
             )
+        pairwise_shape_audit = {"enabled": False}
+        if self.pairwise_shape_expert is not None:
+            sample_slice = slices[sample.sample_id]
+            offset = int(sample_slice.start or 0)
+            evidence_by_record = {}
+            for source in selected["rows"]:
+                group = frozenset(int(value) for value in source["group"])
+                embedding_index = offset + candidate_index[group]
+                original_probability = probabilities[embedding_index]
+                top20_indices = np.argsort(-original_probability)[:20]
+                evidence_by_record[str(source["record_id"])] = {
+                    "embedding": embeddings[embedding_index].numpy(),
+                    "hwr_top1": self.labels[int(top20_indices[0])],
+                    "hwr_top20": [
+                        self.labels[int(value)] for value in top20_indices
+                    ],
+                    "hwr_top20_probabilities": [
+                        float(original_probability[int(value)])
+                        for value in top20_indices
+                    ],
+                }
+            finalized, pairwise_shape_audit = apply_pairwise_shape_rescue(
+                finalized,
+                evidence_by_record,
+                self.pairwise_shape_expert,
+                self.pairwise_shape_configuration,
+            )
         finalized.sort(key=lambda row: int(row["context_index"]))
         runtime_by_record = {str(row["record_id"]): row for row in runtime_rows}
         source_by_group = {
@@ -937,6 +997,13 @@ class RawFormulaContextRuntimeV1:
                     "current_96_formula_training_overlap": self.singleton_hwr is not None,
                     "product_default_enabled": False,
                 },
+                "pairwise_shape_rescue": {
+                    **pairwise_shape_audit,
+                    "enabled": self.pairwise_shape_expert is not None,
+                    "expert_sha256": self.pairwise_shape_expert_sha256,
+                    "configuration_sha256": self.pairwise_shape_config_sha256,
+                    "product_default_enabled": False,
+                },
                 "product_default_enabled": False,
                 "posthoc_test_tuning": True,
                 "candidate_partitions_detail": [
@@ -1014,6 +1081,8 @@ def main() -> int:
     parser.add_argument("--formula-placement-config", type=Path)
     parser.add_argument("--straight-equality-config", type=Path)
     parser.add_argument("--latin-auxiliary-checkpoint", type=Path)
+    parser.add_argument("--pairwise-shape-expert", type=Path)
+    parser.add_argument("--pairwise-shape-config", type=Path)
     parser.add_argument("--input", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
@@ -1045,6 +1114,8 @@ def main() -> int:
         formula_placement_config=args.formula_placement_config,
         straight_equality_config=args.straight_equality_config,
         latin_auxiliary_checkpoint=args.latin_auxiliary_checkpoint,
+        pairwise_shape_expert=args.pairwise_shape_expert,
+        pairwise_shape_config=args.pairwise_shape_config,
         allow_posthoc_shadow=args.allow_posthoc_shadow,
     )
     results = [runtime.infer(row) for row in _load_inputs(input_path)]

@@ -309,3 +309,38 @@ rank-2 단일기호 루프 뒤 남은 7식을 원시 획으로 다시 그려 확
 따라서 이번 루프는 변경 0, 회귀 0으로 종료했고 공식 exact는 `152/159 (95.60%)`를 유지한다. 현재 159식에만 맞춘 규칙으로 `153/159`를 만들지는 않는다. 다음 실질 개선에는 새 writer의 분리 윗가로획 `5`, 폐곡선 `0/8`, 필기체 `y/q`, 단독 `x/\times` 양성·음성 궤적이 필요하며 제품 기본값은 계속 OFF다.
 
 기계 판독 감사 증거 SHA-256: `e630bebfe4fd399370b42c1938e51e4b7bebbb00086d4e426a1d3bdd47a4bcd3`.
+
+## 2026-08-20 외부 임베딩 `8/p` 보정기 shadow 루프
+
+위 감사에서 기각한 것은 클래스 중심·기하 규칙이었다. 후속 루프에서는 기존 승인 외부 train의 `8` 325개와 `p` 389개만 사용해 frozen production HWR encoder의 128차원 임베딩 위에 class-balanced 이진 logistic expert를 학습했다. 식 정답, writer, 식 길이, 산술 결과는 학습·추론 입력에 넣지 않았다.
+
+충돌 제거 외부 holdout의 `8/p` 78개에서 production HWR의 두 클래스 간 판정은 78/78, expert 단독 판정은 77/78이었다. 유일한 `p→8` 오분류 margin은 `0.082169`였다. 따라서 최종 `p`, expert의 `8` margin 0.10 이상, 원본 production HWR Top-20 안의 `8`, `P(8)/P(p) ≥ 0.05`를 모두 요구했다. 이 게이트를 외부 18,330개 전체에 적용하면 변경·개선·회귀가 모두 0개였다.
+
+159식 raw runtime에서는 기존 문맥·배치·교차획 lock 뒤에 이 레이어를 연결했다. 원본 HWR 후보 밖 문자를 만들지 않으며 grouping, 문자 수, 순서를 바꾸지 않는다.
+
+| 평가 집합 | r27 | `8/p` expert shadow |
+|---|---:|---:|
+| public web 110식 | 108/110 (98.18%) | 108/110 (98.18%) |
+| owned phone replay 49식 | 44/49 (89.80%) | **45/49 (91.84%)** |
+| 전체 유효 159식 | 152/159 (95.60%) | **153/159 (96.23%)** |
+
+- 변경·개선: `aiflow_0113` 한 식의 첫 토큰 `p→8`
+- expert margin: `0.583145`
+- 원본 production HWR `8` rank: 13
+- 원본 HWR `P(8)/P(p)`: `0.058589`
+- 회귀 및 그 외 최종 토큰 변경: 0식
+- 획 exact-cover, 삽입·삭제·순서 변경, 정답·writer·목표 글자 수 입력, 산술 계산: 모두 기존 안전 계약 유지
+- CROHME 원시 722식: 보정 발동 0식, grouping exact `331→331`, formula exact `77→77`, 회귀 0식
+- expert/config 인자를 생략한 기본값 OFF 재실행: r27 대비 159식 최종 토큰 차이 0, grouping 차이 0
+
+이 결과는 `153/159`를 제품 정확도로 승격하지 않는다. 임계값이 현재 159식을 관찰해 정해졌고 외부 게이트의 실제 양성 적용 표본이 0개이므로, `retain_as_shadow_only_not_product`로 고정했다. 상용 승격에는 새 writer/formula-disjoint 상업 이용 가능 `8/p` 양성·음성 acceptance가 필요하다.
+
+재현 해시는 다음과 같다.
+
+- expert JSON: `0f07993e4ccc71630290e1516fa132d35ad9e754ffffce88426b399ee7c21061`
+- gate 설정: `a67452835709baa2a22f3a959b419ff203fa626c2bdb2d451828cc2f3a098a45`
+- 외부 학습·평가 보고서: `f571b4ede20b56ac1750a84e0e424ec59554bdde774a5ff8a61be039de0aded4`
+- 159식 runtime 출력: `601239ffabff9b2ad2616c1157a04bd20382306f2fb8ba784e44188bff6943b0`
+- CROHME 반복 진단: `a21e150e841592ea2f0abab8c756a232445f007bdc98159ce0cda16c8e3bd167`
+- 기본값 OFF 호환 출력: `57203d01337b6dd54981bcecdee530838c85a451729946f4fffd3105577d672e`
+- 통합 runtime 감사 manifest: `f62d12b9896f045e117f1ead295475a882b2f76cebd77ceeb92fde8947d9b304`

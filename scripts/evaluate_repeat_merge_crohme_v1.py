@@ -55,6 +55,8 @@ def main() -> int:
     parser.add_argument("--formula-placement-config", type=Path, required=True)
     parser.add_argument("--straight-equality-config", type=Path, required=True)
     parser.add_argument("--latin-auxiliary-checkpoint", type=Path, required=True)
+    parser.add_argument("--pairwise-shape-expert", type=Path)
+    parser.add_argument("--pairwise-shape-config", type=Path)
     parser.add_argument("--crohme", type=Path, default=DEFAULT_CROHME)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
@@ -77,6 +79,8 @@ def main() -> int:
         formula_placement_config=args.formula_placement_config,
         straight_equality_config=args.straight_equality_config,
         latin_auxiliary_checkpoint=args.latin_auxiliary_checkpoint,
+        pairwise_shape_expert=args.pairwise_shape_expert,
+        pairwise_shape_config=args.pairwise_shape_config,
         allow_posthoc_shadow=True,
     )
     if runtime.repeat_merge_configuration is None:
@@ -95,15 +99,27 @@ def main() -> int:
         "/": 1, r"\times": 2,
     }:
         raise ValueError("ranked singleton rescue is not enabled")
-    baseline_singleton = deepcopy(runtime.singleton_configuration)
-    baseline_singleton["token_confidence_thresholds"][r"\times"] = 0.45
-    baseline_singleton["token_candidate_maximum_ranks"] = {
-        "/": 1, r"\times": 1,
-    }
-    baseline_runtime = replace(
-        runtime,
-        singleton_configuration=baseline_singleton,
-    )
+    pairwise_enabled = runtime.pairwise_shape_expert is not None
+    if pairwise_enabled:
+        baseline_runtime = replace(
+            runtime,
+            pairwise_shape_expert=None,
+            pairwise_shape_configuration=None,
+            pairwise_shape_expert_sha256=None,
+            pairwise_shape_config_sha256=None,
+        )
+        baseline_mode = "same_runtime_without_pairwise_shape_rescue"
+    else:
+        baseline_singleton = deepcopy(runtime.singleton_configuration)
+        baseline_singleton["token_confidence_thresholds"][r"\times"] = 0.45
+        baseline_singleton["token_candidate_maximum_ranks"] = {
+            "/": 1, r"\times": 1,
+        }
+        baseline_runtime = replace(
+            runtime,
+            singleton_configuration=baseline_singleton,
+        )
+        baseline_mode = "legacy_singleton_rank1_runtime"
     protocol, duplicates = load_crohme(crohme)
     labels = set(runtime.labels)
     eligible = []
@@ -139,6 +155,7 @@ def main() -> int:
     nested_cross_changed_ids = []
     open_fence_plus_changed_ids = []
     singleton_audit_ids = []
+    pairwise_shape_changed_ids = []
     for formula_id, sample, _truth_tokens in eligible:
         result = runtime.infer(_source(formula_id, sample))
         candidate_results[formula_id] = result
@@ -168,17 +185,27 @@ def main() -> int:
             open_fence_plus_changed_ids.append(formula_id)
         if fusion_audit.get("changed", 0):
             singleton_audit_ids.append(formula_id)
+        if result["audit"]["pairwise_shape_rescue"].get("changed", 0):
+            pairwise_shape_changed_ids.append(formula_id)
+    baseline_trigger_ids = set(
+        pairwise_shape_changed_ids if pairwise_enabled else singleton_audit_ids
+    )
     baseline_results = {
         formula_id: baseline_runtime.infer(_source(formula_id, sample))
         for formula_id, sample, _truth_tokens in eligible
-        if formula_id in set(singleton_audit_ids)
+        if formula_id in baseline_trigger_ids
     }
-    ranked_singleton_changed_ids = sorted(
-        formula_id for formula_id, baseline in baseline_results.items()
-        if baseline["finalized_tokens"]
-        != candidate_results[formula_id]["finalized_tokens"]
+    ranked_singleton_changed_ids = (
+        [] if pairwise_enabled else sorted(
+            formula_id for formula_id, baseline in baseline_results.items()
+            if baseline["finalized_tokens"]
+            != candidate_results[formula_id]["finalized_tokens"]
+        )
     )
-    changed_ids = list(ranked_singleton_changed_ids)
+    changed_ids = sorted(
+        pairwise_shape_changed_ids if pairwise_enabled
+        else ranked_singleton_changed_ids
+    )
     grouping_before = grouping_after = formula_before = formula_after = 0
     grouping_improved = []; grouping_regressed = []
     formula_improved = []; formula_regressed = []
@@ -231,6 +258,9 @@ def main() -> int:
                         "candidate_context_fusion"
                     ]["changes"],
                 },
+                "pairwise_shape_audit": candidate["audit"][
+                    "pairwise_shape_rescue"
+                ],
             })
     report = {
         "schema": SCHEMA,
@@ -279,6 +309,12 @@ def main() -> int:
             "changed_formulas": len(ranked_singleton_changed_ids),
             "changed_formula_ids": sorted(ranked_singleton_changed_ids),
         },
+        "pairwise_shape_rescue": {
+            "enabled": pairwise_enabled,
+            "baseline_mode": baseline_mode,
+            "changed_formulas": len(pairwise_shape_changed_ids),
+            "changed_formula_ids": sorted(pairwise_shape_changed_ids),
+        },
         "current_loop": {
             "changed_formulas": len(changed_ids),
             "changed_formula_ids": sorted(changed_ids),
@@ -301,6 +337,14 @@ def main() -> int:
             "latin_auxiliary_checkpoint_sha256": _sha256(
                 args.latin_auxiliary_checkpoint.resolve()
             ),
+            "pairwise_shape_expert_sha256": (
+                _sha256(args.pairwise_shape_expert.resolve())
+                if args.pairwise_shape_expert is not None else None
+            ),
+            "pairwise_shape_config_sha256": (
+                _sha256(args.pairwise_shape_config.resolve())
+                if args.pairwise_shape_config is not None else None
+            ),
         },
         "limits": [
             "CROHME is noncommercial repeated diagnostic evidence, not product validation",
@@ -322,6 +366,7 @@ def main() -> int:
         "nested_expression_cross_merge_changed": len(nested_cross_changed_ids),
         "open_fence_plus_rescue_changed": len(open_fence_plus_changed_ids),
         "ranked_singleton_rescue_changed": len(ranked_singleton_changed_ids),
+        "pairwise_shape_rescue_changed": len(pairwise_shape_changed_ids),
     }, ensure_ascii=False))
     return 0
 
