@@ -21,6 +21,21 @@ RELATIONS = frozenset({
     "right", "left", "above", "below", "superscript", "subscript", "overlap",
 })
 STRUCTURAL = frozenset({"above", "below", "superscript", "subscript", "contains"})
+FORMULA_OUTPUT_SCHEMA = "aiflow-formula-layout-finalized/v1"
+
+# These are semantic abstention rules, not character replacements. A strong
+# opening fence is a poor script base, while relation/infix operators are poor
+# isolated script children. The lower equality threshold covers visually
+# confusable multi-bar HWR candidates without depending on finalized Top-1.
+OPENING_FENCES = frozenset({"(", "[", r"\{", r"\langle", r"\lceil", r"\lfloor"})
+CLOSING_FENCES = frozenset({")", "]", r"\}", r"\rangle", r"\rceil", r"\rfloor"})
+EQUALITY_FAMILY = frozenset({
+    "=", r"\approx", r"\asymp", r"\doteq", r"\equiv", r"\neq",
+    r"\rightleftharpoons", r"\rightrightarrows", r"\simeq",
+})
+INFIX_SCRIPT_CHILDREN = frozenset({
+    "+", "/", r"\ast", r"\cdot", r"\div", r"\mp", r"\pm", r"\times",
+})
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +49,10 @@ class LayoutConfig:
     script_min_vertical_shift: float = 0.25
     script_max_horizontal_gap: float = 0.75
     structural_candidate_floor: float = 0.25
+    root_inner_left_ratio: float = 0.05
+    opening_fence_script_veto_floor: float = 0.75
+    equality_script_child_veto_floor: float = 0.30
+    infix_script_child_veto_floor: float = 0.75
 
 
 def _box(row: dict) -> dict[str, float]:
@@ -77,6 +96,20 @@ def _score_any(scores: dict[str, float], labels: Iterable[str]) -> float:
     return max((scores.get(label, 0.0) for label in labels), default=0.0)
 
 
+def _script_semantic_veto(
+    parent_scores: dict[str, float], child_scores: dict[str, float],
+    config: LayoutConfig,
+) -> bool:
+    return (
+        _score_any(parent_scores, OPENING_FENCES)
+        >= config.opening_fence_script_veto_floor
+        or _score_any(child_scores, EQUALITY_FAMILY)
+        >= config.equality_script_child_veto_floor
+        or _score_any(child_scores, INFIX_SCRIPT_CHILDREN)
+        >= config.infix_script_child_veto_floor
+    )
+
+
 def _edge(parent: dict, child: dict, relation: str, confidence: float, source: str) -> dict:
     return {
         "parent": str(parent["record_id"]), "child": str(child["record_id"]),
@@ -102,19 +135,31 @@ def infer_formula_layout(
     reference = _reference_height(boxes)
     assigned: set[int] = set()
     structural_parents: set[int] = set()
+    region_memberships: dict[int, set[tuple[int, str]]] = defaultdict(set)
     parent_by_child: dict[int, int] = {}
+    edge_keys: set[tuple[int, int, str]] = set()
     edges: list[dict] = []
 
-    def append_edge(parent: int, child: int, relation: str, confidence: float, source: str) -> bool:
-        if parent == child or child in parent_by_child:
+    def append_edge(
+        parent: int, child: int, relation: str, confidence: float, source: str,
+        *, exclusive_child: bool = True,
+    ) -> bool:
+        key = (parent, child, relation)
+        if parent == child or key in edge_keys:
             return False
-        ancestor = parent
-        while ancestor in parent_by_child:
-            ancestor = parent_by_child[ancestor]
-            if ancestor == child:
+        if exclusive_child:
+            if child in parent_by_child:
                 return False
-        parent_by_child[child] = parent
-        assigned.add(child)
+            ancestor = parent
+            while ancestor in parent_by_child:
+                ancestor = parent_by_child[ancestor]
+                if ancestor == child:
+                    return False
+            parent_by_child[child] = parent
+            assigned.add(child)
+        else:
+            region_memberships[child].add((parent, relation))
+        edge_keys.add(key)
         edges.append(_edge(rows[parent], rows[child], relation, confidence, source))
         return True
 
@@ -128,7 +173,10 @@ def infer_formula_layout(
             continue
         above, below = [], []
         for child, box in enumerate(boxes):
-            if child == parent or child in assigned or child in structural_parents:
+            # Wider bars are visited first. A smaller nested bar may belong to
+            # the wider region, but must not claim an already-seen outer bar
+            # back and create an inverse fraction cycle.
+            if child == parent or child in structural_parents:
                 continue
             overlap = _x_overlap(bar, box)
             if overlap < layout.fraction_min_x_overlap:
@@ -142,47 +190,93 @@ def infer_formula_layout(
         structural_parents.add(parent)
         for relation, children in (("above", above), ("below", below)):
             for child, overlap in children:
-                append_edge(parent, child, relation, min(0.95, 0.80 + 0.15 * overlap), "fraction_geometry")
+                append_edge(
+                    parent, child, relation,
+                    min(0.95, 0.80 + 0.15 * overlap), "fraction_geometry",
+                    exclusive_child=False,
+                )
 
     # Root containment requires independent Top-k evidence; geometry alone is
     # intentionally insufficient for this visually ambiguous relation.
-    for parent, (root, candidates) in enumerate(zip(boxes, scores, strict=True)):
+    seen_roots: set[int] = set()
+    root_rows = zip(range(len(rows)), boxes, scores, strict=True)
+    for parent, root, candidates in sorted(root_rows, key=lambda item: -item[1]["width"]):
         evidence = _score_any(candidates, (r"\sqrt", r"\sqrt{}"))
         if evidence < layout.structural_candidate_floor:
             continue
-        structural_parents.add(parent)
+        inside_children = []
         for child, box in enumerate(boxes):
-            if child == parent or child in assigned or child in structural_parents:
+            # Nested radicals are ordered by enclosing width. The inner root
+            # may be a member of the outer one, but never the inverse.
+            if child == parent or child in seen_roots:
                 continue
             inside = (
-                root["left"] + root["width"] * 0.18 <= box["cx"] <= root["right"] + reference * 0.20
-                and root["top"] <= box["cy"] <= root["bottom"] + reference * 0.35
+                root["left"] + root["width"] * layout.root_inner_left_ratio
+                <= box["cx"] <= root["right"] + reference * 0.20
+                and root["top"] <= box["cy"] <= root["bottom"]
             )
             if inside:
-                append_edge(parent, child, "contains", min(0.95, 0.70 + 0.25 * evidence), "root_topk_geometry")
+                inside_children.append(child)
+
+        # A lone/unclosed opening fence next to a radical is more safely read
+        # as a baseline expression (for example ``sqrt (a)``) than as a
+        # partially captured radicand. Complete parenthesized radicands remain
+        # eligible when both fence sides are geometrically contained.
+        has_open = any(
+            _score_any(scores[child], OPENING_FENCES)
+            >= layout.opening_fence_script_veto_floor
+            for child in inside_children
+        )
+        has_close = any(
+            _score_any(scores[child], CLOSING_FENCES)
+            >= layout.opening_fence_script_veto_floor
+            for child in inside_children
+        )
+        if has_open and not has_close:
+            inside_children = []
+        if inside_children:
+            structural_parents.add(parent)
+        for child in inside_children:
+            append_edge(
+                parent, child, "contains",
+                min(0.95, 0.70 + 0.25 * evidence), "root_topk_geometry",
+                exclusive_child=False,
+            )
+        seen_roots.add(parent)
 
     if script_predictor is not None:
         for parent, child, relation, confidence in script_predictor.propose(
             rows, boxes, reference, assigned, structural_parents,
         ):
+            if _script_semantic_veto(scores[parent], scores[child], layout):
+                continue
             append_edge(parent, child, relation, confidence, "script_network_v1")
     else:
         # Remaining small displaced boxes may be scripts of the nearest box on
-        # the left. This baseline abstains when size, gap, or displacement is weak.
+        # the left. Region signatures keep numerator, denominator, and radical
+        # contents separate while still allowing nested scripts such as x^2.
         for child, box in sorted(enumerate(boxes), key=lambda item: (item[1]["left"], item[1]["top"])):
             if child in assigned or child in structural_parents:
                 continue
+            signature = frozenset(region_memberships.get(child, ()))
             parents = [
                 parent for parent, base in enumerate(boxes)
-                if parent != child and base["cx"] < box["cx"]
+                if parent != child and parent not in structural_parents
+                and parent not in assigned
+                and base["cx"] < box["cx"]
+                and base["height"] >= reference * 0.45
+                and frozenset(region_memberships.get(parent, ())) == signature
                 and max(0.0, box["left"] - base["right"]) <= reference * layout.script_max_horizontal_gap
             ]
             if not parents:
                 continue
             parent = max(parents, key=lambda index: boxes[index]["right"])
             base = boxes[parent]
+            if _script_semantic_veto(scores[parent], scores[child], layout):
+                continue
             ratio = box["height"] / max(base["height"], 1e-6)
-            if not layout.script_min_height_ratio <= ratio <= layout.script_max_height_ratio:
+            maximum_ratio = 1.25 if signature else layout.script_max_height_ratio
+            if not layout.script_min_height_ratio <= ratio <= maximum_ratio:
                 continue
             shift = base["height"] * layout.script_min_vertical_shift
             if box["cy"] <= base["cy"] - shift and box["bottom"] <= base["cy"] + base["height"] * 0.05:
@@ -191,7 +285,31 @@ def infer_formula_layout(
                 relation = "subscript"
             else:
                 continue
-            append_edge(parent, child, relation, 0.80, "script_geometry")
+            if not append_edge(parent, child, relation, 0.80, "script_geometry"):
+                continue
+            # A script is a span, not an isolated pair. Tiny punctuation such
+            # as the minus in e^{-n} may fail the size test but is accepted only
+            # when bracketed between the confirmed base and script endpoint.
+            for bridge, middle in enumerate(boxes):
+                if (
+                    bridge == parent or bridge == child or bridge in assigned
+                    or bridge in structural_parents
+                    or frozenset(region_memberships.get(bridge, ())) != signature
+                    or not base["cx"] < middle["cx"] < box["cx"]
+                ):
+                    continue
+                same_side = (
+                    middle["bottom"] <= base["cy"] + base["height"] * 0.05
+                    if relation == "superscript"
+                    else middle["top"] >= base["cy"] - base["height"] * 0.05
+                )
+                if same_side:
+                    if _script_semantic_veto(scores[parent], scores[bridge], layout):
+                        continue
+                    append_edge(
+                        parent, bridge, relation, 0.78,
+                        "script_span_geometry",
+                    )
 
     row_by_id = {str(row["record_id"]): row for row in rows}
     box_by_id = {str(row["record_id"]): box for row, box in zip(rows, boxes, strict=True)}
@@ -210,7 +328,9 @@ def infer_formula_layout(
 
     def visit(record_id: str) -> None:
         if record_id in active:
-            raise ValueError("formula layout relation cycle")
+            raise ValueError(
+                f"formula layout relation cycle at {record_id}: {sorted(active)}"
+            )
         if record_id in ordered_ids:
             return
         active.add(record_id)
@@ -306,9 +426,12 @@ def recontextualize_formula_rows(
     }
 
 
-def serialize_formula(rows: list[dict], predictions: dict[str, str] | None = None) -> str:
+def serialize_formula(
+    rows: list[dict], predictions: dict[str, str] | None = None,
+    *, script_predictor=None,
+) -> str:
     """Serialize the inferred structural graph without changing candidates."""
-    result = infer_formula_layout(rows)
+    result = infer_formula_layout(rows, script_predictor=script_predictor)
     row_by_id = result["row_by_id"]
     labels = {
         record_id: str((predictions or {}).get(record_id, row["final_topk"][0]))
@@ -323,12 +446,17 @@ def serialize_formula(rows: list[dict], predictions: dict[str, str] | None = Non
     def left(record_id: str) -> tuple[float, str]:
         return float(row_by_id[record_id]["geometry"]["left"]), record_id
 
+    emitted: set[str] = set()
+
     def sequence(record_ids: Iterable[str], active: frozenset[str]) -> str:
         return "".join(node(record_id, active) for record_id in sorted(set(record_ids), key=left))
 
     def node(record_id: str, active: frozenset[str]) -> str:
         if record_id in active:
             raise ValueError("formula layout serialization cycle")
+        if record_id in emitted:
+            return ""
+        emitted.add(record_id)
         nested = active | {record_id}
         slots = children.get(record_id, {})
         above, below, contained = slots.get("above", []), slots.get("below", []), slots.get("contains", [])
@@ -346,6 +474,93 @@ def serialize_formula(rows: list[dict], predictions: dict[str, str] | None = Non
 
     roots = [record_id for record_id in row_by_id if record_id not in structural_children]
     return sequence(roots, frozenset())
+
+
+def finalize_formula_outputs(
+    rows: list[dict], predictions: dict[str, str], *, script_predictor=None,
+) -> tuple[list[dict], dict]:
+    """Emit one shadow formula result per immutable candidate grouping."""
+    input_ids = {str(row.get("record_id", "")) for row in rows}
+    if "" in input_ids or len(input_ids) != len(rows):
+        raise ValueError("formula output record_ids must be unique and non-empty")
+    if set(predictions) != input_ids:
+        raise ValueError("formula output prediction coverage mismatch")
+    grouped: dict[str, list[dict]] = defaultdict(list)
+    for row in rows:
+        formula_id = str(row.get("formula_id", ""))
+        if not formula_id:
+            raise ValueError("formula output formula_id must be non-empty")
+        record_id = str(row["record_id"])
+        token = str(predictions[record_id])
+        if token not in [str(value) for value in row.get("final_topk") or []]:
+            raise ValueError(f"formula output token is outside HWR candidates: {record_id}")
+        grouped[formula_id].append(row)
+
+    output = []
+    relation_counts: Counter[str] = Counter()
+    formulas_with_multi_parent_nodes = 0
+    multi_parent_node_count = 0
+    for formula_id in sorted(grouped):
+        sequence = grouped[formula_id]
+        layout = infer_formula_layout(sequence, script_predictor=script_predictor)
+        ordered = list(layout["ordered_record_ids"])
+        relation_counts.update(layout["relation_counts"])
+        parents_by_child: dict[str, list[dict]] = defaultdict(list)
+        for edge in layout["edges"]:
+            parents_by_child[str(edge["child"])].append({
+                "parent_record_id": str(edge["parent"]),
+                "relation": str(edge["type"]),
+            })
+        multi_parent_nodes = []
+        for record_id, parent_relations in sorted(parents_by_child.items()):
+            if len({value["parent_record_id"] for value in parent_relations}) <= 1:
+                continue
+            multi_parent_nodes.append({
+                "record_id": record_id,
+                "parent_relations": sorted(
+                    parent_relations,
+                    key=lambda value: (value["parent_record_id"], value["relation"]),
+                ),
+            })
+        formulas_with_multi_parent_nodes += bool(multi_parent_nodes)
+        multi_parent_node_count += len(multi_parent_nodes)
+        output.append({
+            "schema": FORMULA_OUTPUT_SCHEMA,
+            "status": "shadow_runtime_only",
+            "formula_id": formula_id,
+            "latex": serialize_formula(
+                sequence, predictions, script_predictor=script_predictor,
+            ),
+            "latex_status": (
+                "shadow_ambiguous_multi_parent"
+                if multi_parent_nodes else "shadow_single_parent_graph"
+            ),
+            "latex_authoritative": False,
+            "relation_graph_semantics": "transitive_nonexclusive",
+            "multi_parent_nodes": multi_parent_nodes,
+            "ordered_record_ids": ordered,
+            "ordered_tokens": [str(predictions[record_id]) for record_id in ordered],
+            "relations": list(layout["edges"]),
+            "candidate_preservation_rate": 1.0,
+            "new_tokens": 0,
+            "deleted_glyphs": 0,
+            "grouping_mutations": 0,
+        })
+    return output, {
+        "schema": FORMULA_OUTPUT_SCHEMA,
+        "status": "shadow_runtime_only",
+        "formulas": len(output),
+        "records": len(rows),
+        "relation_counts": dict(sorted(relation_counts.items())),
+        "relation_graph_semantics": "transitive_nonexclusive",
+        "formulas_with_multi_parent_nodes": formulas_with_multi_parent_nodes,
+        "multi_parent_nodes": multi_parent_node_count,
+        "latex_authoritative": False,
+        "candidate_preservation_rate": 1.0,
+        "new_tokens": 0,
+        "deleted_glyphs": 0,
+        "grouping_mutations": 0,
+    }
 
 
 def _sample(record_id: str, left: float, top: float, right: float, bottom: float, token: str = "x") -> dict:
@@ -366,6 +581,18 @@ def _self_test() -> None:
     scripted = [_sample("x", 0, 10, 20, 40), _sample("2", 21, 0, 29, 14, "2")]
     layout = infer_formula_layout(scripted)
     assert [(edge["parent"], edge["child"], edge["type"]) for edge in layout["edges"]] == [("x", "2", "superscript")]
+    assert not infer_formula_layout([
+        _sample("open", 0, 10, 20, 40, "("),
+        _sample("y", 21, 30, 29, 44, "y"),
+    ])["edges"]
+    assert not infer_formula_layout([
+        _sample("x", 0, 10, 20, 40, "x"),
+        _sample("eq", 21, 0, 29, 14, "="),
+    ])["edges"]
+    assert not infer_formula_layout([
+        _sample("root", 0, 0, 40, 40, r"\sqrt{}"),
+        _sample("open", 10, 10, 18, 30, "("),
+    ])["edges"]
     contextual, audit = recontextualize_formula_rows(list(reversed(scripted)))
     assert sorted((row["record_id"], row["context"]["index"]) for row in contextual) == [("2", 1), ("x", 0)]
     assert serialize_formula(scripted) == "x^{2}" and audit["grouping_mutations"] == 0
@@ -375,6 +602,27 @@ def _self_test() -> None:
         _sample("den", 10, 30, 20, 42, "2"),
     ]
     assert serialize_formula(fraction) == r"\frac{1}{2}"
+    formulae, formula_audit = finalize_formula_outputs(
+        fraction, {"bar": "-", "num": "1", "den": "2"},
+    )
+    assert formulae[0]["latex"] == r"\frac{1}{2}"
+    assert formulae[0]["latex_status"] == "shadow_single_parent_graph"
+    assert formula_audit["multi_parent_nodes"] == 0
+    assert formula_audit["candidate_preservation_rate"] == 1.0
+    nested_fraction = [
+        _sample("outer", 0, 20, 100, 22, "-"),
+        _sample("inner", 10, 10, 50, 12, "-"),
+        _sample("nested_num", 20, 0, 30, 8, "1"),
+        _sample("nested_den", 20, 14, 30, 18, "2"),
+        _sample("outer_den", 20, 30, 30, 40, "3"),
+    ]
+    nested_formulae, nested_audit = finalize_formula_outputs(
+        nested_fraction,
+        {str(row["record_id"]): str(row["final_topk"][0]) for row in nested_fraction},
+    )
+    assert nested_formulae[0]["latex"] == r"\frac{\frac{1}{2}}{3}"
+    assert nested_formulae[0]["latex_status"] == "shadow_ambiguous_multi_parent"
+    assert nested_audit["multi_parent_nodes"] == 2
 
 
 if __name__ == "__main__":

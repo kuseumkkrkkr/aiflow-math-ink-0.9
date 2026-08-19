@@ -117,6 +117,40 @@ def _order_metrics(
     }
 
 
+def _flat_structure_gate(rows: list[dict], script_predictor=None) -> dict:
+    """Require no invented structure in the accepted direct flat corpus."""
+    edges = 0
+    affected = []
+    for formula_id, sequence in _grouped(rows).items():
+        layout = infer_formula_layout(sequence, script_predictor=script_predictor)
+        structural = [edge for edge in layout["edges"] if edge["type"] in STRUCTURAL]
+        edges += len(structural)
+        if structural:
+            by_id = {str(row["record_id"]): row for row in sequence}
+            affected.append({
+                "formula_id": formula_id,
+                "truth_labels": [
+                    str(row["label"])
+                    for row in sorted(sequence, key=lambda item: int(item["context"]["index"]))
+                ],
+                "edges": [
+                    {
+                        **edge,
+                        "parent_label": str(by_id[edge["parent"]]["label"]),
+                        "child_label": str(by_id[edge["child"]]["label"]),
+                    }
+                    for edge in structural
+                ],
+            })
+    return {
+        "expected": "zero structural edges in accepted direct flat formulas",
+        "passed": edges == 0,
+        "false_positive_edges": edges,
+        "affected_formulas": len(affected),
+        "failures": affected[:25],
+    }
+
+
 def _prediction_delta(
     rows: list[dict], baseline: dict[str, str], challenger: dict[str, str],
 ) -> dict | None:
@@ -270,10 +304,15 @@ def _truth_edges(path: Path, rows: list[dict]) -> set[tuple[str, str, str]]:
     return edges
 
 
-def _relation_metrics(rows: list[dict], root: Path, script_predictor=None) -> dict:
+def _relation_metrics(
+    rows: list[dict], root: Path, script_predictor=None,
+    predictions: dict[str, str] | None = None,
+) -> dict:
     formulas = _grouped(rows)
     totals = {relation: Counter(tp=0, fp=0, fn=0) for relation in sorted(STRUCTURAL)}
     exact = parsed = 0
+    hwr_exact = final_exact = oracle_exact = 0
+    relation_hwr_exact = relation_final_exact = relation_oracle_exact = 0
     failures = []
     root = root.resolve()
     for formula_id, sequence in formulas.items():
@@ -287,7 +326,20 @@ def _relation_metrics(rows: list[dict], root: Path, script_predictor=None) -> di
             for edge in layout["edges"] if edge["type"] in STRUCTURAL
         }
         parsed += 1
-        exact += predicted == truth
+        relation_ok = predicted == truth
+        exact += relation_ok
+        hwr_ok = all(str(row["final_topk"][0]) == str(row["label"]) for row in sequence)
+        final_ok = bool(predictions) and all(
+            predictions.get(str(row["record_id"])) == str(row["label"])
+            for row in sequence
+        )
+        oracle_ok = all(str(row["label"]) in row["final_topk"] for row in sequence)
+        hwr_exact += hwr_ok
+        final_exact += final_ok
+        oracle_exact += oracle_ok
+        relation_hwr_exact += relation_ok and hwr_ok
+        relation_final_exact += relation_ok and final_ok
+        relation_oracle_exact += relation_ok and oracle_ok
         for relation in totals:
             expected = {edge for edge in truth if edge[2] == relation}
             actual = {edge for edge in predicted if edge[2] == relation}
@@ -312,6 +364,18 @@ def _relation_metrics(rows: list[dict], root: Path, script_predictor=None) -> di
     recall = micro["tp"] / max(micro["tp"] + micro["fn"], 1)
     return {
         "formulas": parsed, "formula_exact": exact / max(parsed, 1),
+        "formula_exact_count": exact,
+        "character_formula_exact": {
+            "hwr_top1": hwr_exact / max(parsed, 1),
+            "context_finalized": final_exact / max(parsed, 1) if predictions else None,
+            "top5_oracle": oracle_exact / max(parsed, 1),
+        },
+        "relation_and_character_formula_exact": {
+            "hwr_top1": relation_hwr_exact / max(parsed, 1),
+            "context_finalized": relation_final_exact / max(parsed, 1) if predictions else None,
+            "top5_oracle": relation_oracle_exact / max(parsed, 1),
+            "context_finalized_count": relation_final_exact if predictions else None,
+        },
         "micro": {
             **dict(micro), "precision": precision, "recall": recall,
             "f1": 2 * precision * recall / max(precision + recall, 1e-12),
@@ -337,6 +401,7 @@ def _self_test() -> None:
     metrics = _order_metrics(rows, {"a": "1", "b": "+"})
     assert metrics["layout_order_exact"] == 1.0
     assert metrics["layout_and_character_formula_exact"]["context_finalized"] == 1.0
+    assert _flat_structure_gate(rows)["passed"]
 
 
 def main() -> int:
@@ -374,6 +439,7 @@ def main() -> int:
         },
         "direct": {
             "metrics": _order_metrics(direct, finalized, script_predictor),
+            "flat_structure_gate": _flat_structure_gate(direct, script_predictor),
             "candidates_sha256": _sha256(args.direct_candidates),
             "finalized_sha256": _sha256(args.direct_finalized) if args.direct_finalized else None,
             "interpretation": "accepted ownership order is evaluation truth only and is not read by the layout layer",
@@ -395,7 +461,9 @@ def main() -> int:
             "tracegroup_order_proxy": _order_metrics(
                 crohme, crohme_finalized, script_predictor
             ),
-            "relation_graph": _relation_metrics(crohme, args.crohme_root, script_predictor) if args.crohme_root else None,
+            "relation_graph": _relation_metrics(
+                crohme, args.crohme_root, script_predictor, crohme_finalized
+            ) if args.crohme_root else None,
             "baseline_tracegroup_order_proxy": (
                 _order_metrics(crohme, crohme_baseline, script_predictor)
                 if crohme_baseline else None
