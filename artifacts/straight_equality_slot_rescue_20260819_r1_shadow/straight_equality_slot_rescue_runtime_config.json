@@ -1,0 +1,42 @@
+{
+  "schema": "aiflow-straight-equality-slot-rescue-runtime-config/v1",
+  "rescue_schema": "aiflow-straight-equality-slot-rescue/v1",
+  "generated_at": "2026-08-19T13:14:05.773112+00:00",
+  "status": "shadow_runtime_only",
+  "runtime_admitted": false,
+  "product_default_admitted": false,
+  "configuration": {
+    "candidate_width": 20,
+    "auxiliary_weight": 0.6,
+    "allowed_auxiliary_policies": [
+      "current_expanded_writer_loo_probability_fusion",
+      "old_new_product_probability_fusion"
+    ],
+    "replacement": "=",
+    "maximum_candidate_rank": 3,
+    "minimum_candidate_probability": 0.1,
+    "required_stroke_count": 2,
+    "minimum_aspect_log": 0.8,
+    "maximum_path_over_diagonal": 1.2,
+    "maximum_absolute_direction_y": 0.2,
+    "minimum_formula_length": 3,
+    "maximum_formula_length": 64,
+    "maximum_changes_per_formula": 1
+  },
+  "gate": {
+    "shadow_runtime_admitted": true,
+    "product_default_admitted": false,
+    "criteria": {
+      "direct_two_glyph_improvements": true,
+      "direct_one_formula_improvement": true,
+      "direct_regressions_zero": true,
+      "crohme_repeated_diagnostic_regressions_zero": true,
+      "candidate_layout_and_arithmetic_contract_passed": true
+    },
+    "promotion_requirement": "untouched project-owned writer-disjoint and formula-disjoint commercial acceptance with positive straight-equality cases"
+  },
+  "evidence": {
+    "path": "D:\\AIFlow-Workspace\\PrivateData\\math-ink-data-collector\\derived\\hwr-head-calibration-20260819-r1\\straight_equality_slot_eval_r1_groupfix.json",
+    "sha256": "bef12e04bfe66d7a9d3cdca311440d731d47fec4dd941a022306ae206a03915f"
+  }
+}
