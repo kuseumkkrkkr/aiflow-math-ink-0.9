@@ -392,3 +392,30 @@ r1이 검토로 보낸 32식 중 22식은 “문맥 교정된 숫자가 다자�
 r2는 커버리지를 높였지만 고정 비교 기준인 CROHME 선택적 정밀도가 `1.04%p` 하락했다. 따라서 `reject_r2_keep_r1_selected`로 기각했으며 실제 선택 설정은 계속 r1이다. r2도 같은 159식을 관찰한 posthoc이고 CROHME도 비상업 반복 진단이므로 제품 승격 근거가 아니다.
 
 후보 증거 확장 runtime SHA-256은 `47033bd2eefe2abf25d2958824974d5a69c46e704e62cf24f516e8625e62c0af`, r2 설정은 `c6d2c385c4e77f2509ff83e2d2c14894cc0a1b74e977d02cd77a11302bb1d606`, r2 평가 manifest는 `7f993b3168bb593a3881ff2e7f6dd8ff462a39afa5c3fc933ef7a4aa23a736f6`, 선택 manifest는 `366afc18d6a96bc1b9cda136087d0de51ebb5eaafc822d97726de5e39ebc7d14`이다.
+
+## 2026-08-20 고정 재생 중복 감사와 공식 배치 shadow 연결
+
+합의했던 고정 재생 정의를 최신 선택 runtime으로 다시 평가했다. 이전 110식은 105/110, 그중 ownership 47식은 46/47, canonical 10식은 10/10이었다. 자동 확정은 각각 90/90, 38/38, 10/10 exact였고 오분류 5건은 모두 `REVIEW_REQUIRED`에 포함됐다.
+
+그러나 잉크·셀·관계의 내용 해시를 비교하자 이전 110식 전부가 현재 159식 안의 동일 내용이었다. 110식 모두 ID가 바뀌었고, 양쪽에 동시에 존재하는 ID 107개는 오히려 서로 다른 내용을 가리켰다. 따라서 ownership/canonical 수치는 고정 재생 회귀 확인에는 쓸 수 있지만 독립 정확도로 합산할 수 없다.
+
+기존 `formula_layout_v1.py`를 raw runtime의 opt-in 출력으로 연결했다. 입력은 상류에서 확정한 후보와 불변 symbol box뿐이며 문자, exact-cover 그룹, 읽기 순서, 수락 판정을 되먹임으로 바꾸지 않는다. `--emit-formula-layout-shadow`를 줬을 때만 `formula_latex_shadow`를 내보내며 제품 기본값은 계속 OFF다.
+
+| 평가 | 평면 토큰 | 공식 배치 shadow |
+|---|---:|---:|
+| 현재 159식 LaTeX exact | 149/159 (93.71%) | **153/159 (96.23%)** |
+| 자동 확정 영역 | 123/127 (96.85%) | **127/127 (100%)** |
+| 문자·그룹·순서·수락 판정 변경 | 0 | 0 |
+
+구조 개선 4건은 `aiflow_0065`의 `\sqrt{(a)}`, `aiflow_0098`의 `x^{2}`, `aiflow_0099`의 `\sqrt{(x)}`, `aiflow_0100`의 `y^{2}+1`이다. 기존 정답의 회귀는 0건이다. `aiflow_0104`에는 잘못된 위첨자 관계가 하나 생겼지만 이 식은 이미 `REVIEW_REQUIRED`이므로 자동 확정되지 않고 raw stroke로 되돌린다.
+
+CROHME 비상업 반복 진단은 선택된 기존 레이아웃 기준을 그대로 유지했다. 관계식 exact는 552/984, 관계+문자 exact는 225/984, 관계 micro F1은 0.775003이다. 괄호를 위·아래첨자 자식에서 금지하는 임시 규칙은 현재 오류 하나를 가렸지만 CROHME F1이 0.774185로 하락해 기각하고 코드를 되돌렸다.
+
+이 루프에서는 학습을 수행하지 않았다. 결론은 `retain_opt_in_shadow_only_not_product_default`이며, 상용 승격에는 새 writer/formula-disjoint 상업 이용 가능 데이터의 독립 수락 검증이 필요하다.
+
+재현 증거 SHA-256은 다음과 같다.
+
+- 고정 재생·내용 중복 감사: `ee9ff2b56cdcc2f607e2a7532d3b298a2e78d38a204dd2f14c4612aeaf0c485e`
+- 기본 OFF 호환 runtime: `47033bd2eefe2abf25d2958824974d5a69c46e704e62cf24f516e8625e62c0af`
+- 공식 배치 shadow runtime: `9f931fe676cb900553a03fd7019e3b69517fd7fcab7c146ba1d2090aecf21996`
+- 공식 배치 평가 manifest: `5bfe4cc2ec346c833f93a3dfcd0ad8ed815cc64a7b17a3513e611669e24c88c5`

@@ -57,6 +57,7 @@ from evaluate_partition_context_ranker_v1 import (
     _validate_repeat_merge_configuration,
 )
 from finalize_formula_context_v1 import DEFAULT_CONTEXT, OwnedFormulaContextFinalizer
+from formula_layout_v1 import finalize_formula_outputs
 from formula_acceptance_guard_v1 import (
     apply_formula_acceptance_guard, load_configuration as load_acceptance_configuration,
 )
@@ -161,6 +162,52 @@ def _apply_singleton_finalized_rows(
     return output, audit
 
 
+def _formula_layout_shadow(
+    runtime_rows: list[dict], finalized: list[dict],
+) -> tuple[dict, dict]:
+    predictions = {
+        str(row["record_id"]): str(row["finalized_top1"])
+        for row in finalized
+    }
+    if len(predictions) != len(finalized):
+        raise ValueError("formula layout finalized record ids must be unique")
+    layout_rows = []
+    candidate_extensions = 0
+    selected_semantic_promotions = 0
+    for source in runtime_rows:
+        row = {**source}
+        record_id = str(row["record_id"])
+        candidates = [str(value) for value in row["final_topk"]]
+        probabilities = [float(value) for value in row["final_topk_probabilities"]]
+        token = predictions[record_id]
+        if token not in candidates:
+            candidates.append(token)
+            probabilities.append(1.0)
+            candidate_extensions += 1
+            selected_semantic_promotions += 1
+        else:
+            selected_index = candidates.index(token)
+            if probabilities[selected_index] < 1.0:
+                probabilities[selected_index] = 1.0
+                selected_semantic_promotions += 1
+        row["final_topk"] = candidates
+        row["final_topk_probabilities"] = probabilities
+        layout_rows.append(row)
+    formulae, audit = finalize_formula_outputs(layout_rows, predictions)
+    if len(formulae) != 1:
+        raise AssertionError("raw runtime must emit exactly one layout formula")
+    return formulae[0], {
+        **audit,
+        "enabled": True,
+        "candidate_extensions": candidate_extensions,
+        "candidate_extension_policy": "upstream finalized token only",
+        "selected_semantic_promotions": selected_semantic_promotions,
+        "selected_semantic_policy": "upstream finalized token receives layout-only unit evidence",
+        "feedback_into_character_model": False,
+        "product_default_enabled": False,
+    }
+
+
 @dataclass(frozen=True)
 class RawFormulaContextRuntimeV1:
     ranker_payload: dict[str, Any]
@@ -188,6 +235,7 @@ class RawFormulaContextRuntimeV1:
     pairwise_shape_configuration: dict[str, Any] | None
     pairwise_shape_expert_sha256: str | None
     pairwise_shape_config_sha256: str | None
+    emit_formula_layout_shadow: bool
 
     @classmethod
     def from_artifacts(
@@ -202,6 +250,7 @@ class RawFormulaContextRuntimeV1:
         latin_auxiliary_checkpoint: Path | None = None,
         pairwise_shape_expert: Path | None = None,
         pairwise_shape_config: Path | None = None,
+        emit_formula_layout_shadow: bool = False,
         allow_posthoc_shadow: bool = False,
     ) -> "RawFormulaContextRuntimeV1":
         ranker_path = Path(partition_ranker).expanduser().resolve()
@@ -669,6 +718,7 @@ class RawFormulaContextRuntimeV1:
             pairwise_configuration,
             pairwise_expert_sha256,
             pairwise_config_sha256,
+            bool(emit_formula_layout_shadow),
         )
 
     def _sample(self, source: dict[str, Any]) -> Sample:
@@ -957,6 +1007,9 @@ class RawFormulaContextRuntimeV1:
             }
             for row in finalized
         ]
+        layout_output = layout_audit = None
+        if self.emit_formula_layout_shadow:
+            layout_output, layout_audit = _formula_layout_shadow(runtime_rows, finalized)
         return {
             "schema": OUTPUT_SCHEMA,
             "status": "development_only_posthoc_shadow",
@@ -967,6 +1020,10 @@ class RawFormulaContextRuntimeV1:
             "partition_context_tokens": list(selected["tokens"]),
             "finalized_tokens": finalized_tokens,
             "formula_text": " ".join(finalized_tokens),
+            **({
+                "formula_latex_shadow": layout_output["latex"],
+                "formula_layout_shadow": layout_output,
+            } if layout_output is not None else {}),
             "audit": {
                 "candidate_groups": len(sample.candidates),
                 "candidate_partitions": len(partitions),
@@ -1026,6 +1083,7 @@ class RawFormulaContextRuntimeV1:
                     for partition in partitions
                 ],
                 "finalizer": finalizer_audit,
+                **({"formula_layout_shadow": layout_audit} if layout_audit is not None else {}),
             },
         }
 
@@ -1075,6 +1133,27 @@ def _self_test() -> None:
     assert rescued[0]["finalized_top1"] == "/"
     assert rescued[0]["decision_source"] == "singleton_shape_rescue"
     assert audit["changed"] == 1
+    layout_rows = [
+        {
+            "record_id": "x", "formula_id": "layout", "final_topk": ["x"],
+            "final_topk_probabilities": [1.0],
+            "geometry": {"left": 0, "top": 10, "right": 20, "bottom": 40},
+        },
+        {
+            "record_id": "2", "formula_id": "layout", "final_topk": ["2"],
+            "final_topk_probabilities": [1.0],
+            "geometry": {"left": 21, "top": 0, "right": 29, "bottom": 14},
+        },
+    ]
+    layout, layout_audit = _formula_layout_shadow(
+        layout_rows,
+        [
+            {"record_id": "x", "finalized_top1": "x"},
+            {"record_id": "2", "finalized_top1": "2"},
+        ],
+    )
+    assert layout["latex"] == "x^{2}"
+    assert layout_audit["candidate_extensions"] == 0
 
 
 def main() -> int:
@@ -1092,6 +1171,7 @@ def main() -> int:
     parser.add_argument("--pairwise-shape-expert", type=Path)
     parser.add_argument("--pairwise-shape-config", type=Path)
     parser.add_argument("--formula-acceptance-config", type=Path)
+    parser.add_argument("--emit-formula-layout-shadow", action="store_true")
     parser.add_argument("--input", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
@@ -1125,6 +1205,7 @@ def main() -> int:
         latin_auxiliary_checkpoint=args.latin_auxiliary_checkpoint,
         pairwise_shape_expert=args.pairwise_shape_expert,
         pairwise_shape_config=args.pairwise_shape_config,
+        emit_formula_layout_shadow=args.emit_formula_layout_shadow,
         allow_posthoc_shadow=args.allow_posthoc_shadow,
     )
     results = [runtime.infer(row) for row in _load_inputs(input_path)]
@@ -1138,6 +1219,8 @@ def main() -> int:
             "posthoc_test_tuning": True,
         },
     }
+    if args.emit_formula_layout_shadow:
+        output["audit"]["formula_layout_shadow_emitted"] = len(results)
     if args.formula_acceptance_config is not None:
         acceptance_configuration, acceptance_configuration_sha256 = (
             load_acceptance_configuration(args.formula_acceptance_config)
