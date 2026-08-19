@@ -1,61 +1,71 @@
 {
   "schema": "aiflow-raw-candidate-context-fusion-runtime-manifest/v1",
-  "generated_at": "2026-08-19T15:25:40.3621641Z",
+  "generated_at": "2026-08-19T15:45:03.9791774Z",
   "status": "development_only_posthoc_shadow",
   "shadow_runtime_admitted": true,
   "product_default_admitted": false,
   "configuration": {
     "path": "artifacts/raw_candidate_context_fusion_20260819_r1_shadow/candidate_context_fusion_runtime_config.json",
-    "sha256": "4479027b96551e917773b5b105d166aa36d99c568246371a5e9a5d50e5b2ffaa"
+    "sha256": "f30c4028546e223ae72386b786ac142ece81b358a35902478349554660d55c61"
   },
   "selected_summary": {
     "path": "artifacts/raw_candidate_context_fusion_20260819_r1_shadow/selected_summary.json",
-    "sha256": "2de232caddd797bc90793a409bec4a4b042c667ab7a9c33b169d486f3b49ab6e"
+    "sha256": "2ee569d7a86ae6a701f5c38e3d5c808ba320271919453dd60aaf367eaab69d4d"
   },
   "evaluation_evidence": {
     "path": "artifacts/raw_candidate_context_fusion_20260819_r1_shadow/evaluation_evidence.json",
-    "sha256": "2917b40230da88ada8b0bb0bcacabaea5232343cf52f42c7969c61605fe2f7df"
+    "sha256": "5e15ea1d6fdca8584147390945ba3ea317111d8d5433adb698a1d38a79fc1e39"
   },
   "runtime_contract": {
     "restricted_context_candidates": "original frozen HWR Top-5",
     "dual_numeric_candidates": "baseline and admitted auxiliary HWR Top-5 union",
-    "auxiliary_operation": "probability reranking plus gated operand-to-digit rescue",
+    "wide_numeric_candidates": "baseline and product-fused HWR Top-10 union",
+    "auxiliary_operation": "probability reranking plus gated operand-to-digit rescues",
     "formula_context_finalizer_reapplied": true,
     "singleton_shape_tokens": ["/", "\\times"],
     "dual_numeric_maximum_operand_changes": 2,
+    "wide_numeric_maximum_operand_changes": 2,
+    "wide_numeric_unique_minimum_repair_required": true,
+    "wide_numeric_equality_replacement": false,
     "all_strokes_exactly_once": true,
     "tokens_outside_admitted_candidate_contract": 0,
     "deleted_glyphs": 0,
     "grouping_mutations": 0,
-    "operator_relation_or_fence_mutations": 0,
+    "dual_numeric_operator_relation_or_fence_mutations": 0,
+    "wide_numeric_non_digit_replacements": 0,
+    "layout_mutations": 0,
     "arithmetic_evaluation": false
   },
   "metrics": {
     "chronological_49": {
       "baseline_formula_exact_count": 38,
-      "challenger_formula_exact_count": 41,
-      "challenger_formula_exact": 0.8367346938775511,
-      "improved_formula_ids": ["aiflow_0049", "aiflow_0052", "aiflow_0078"],
+      "challenger_formula_exact_count": 42,
+      "challenger_formula_exact": 0.8571428571428571,
+      "improved_formula_ids": ["aiflow_0049", "aiflow_0052", "aiflow_0058", "aiflow_0078"],
       "regressed_formula_ids": [],
       "original_top5_oracle_count": 41,
-      "dual_hwr_top5_union_oracle_count": 46
+      "dual_hwr_top5_union_oracle_count": 46,
+      "product_fused_top10_union_oracle_count": 47
     },
     "raw_runtime": {
       "formulas": 159,
-      "chronological_test_exact_count": 41,
+      "chronological_test_exact_count": 42,
       "chronological_test_total": 49,
-      "accepted_ownership_exact_count": 86,
+      "accepted_ownership_exact_count": 87,
       "accepted_ownership_total": 96,
-      "all_valid_prompt_exact_count": 126,
+      "all_valid_prompt_exact_count": 129,
       "all_valid_prompt_total": 159,
-      "improved_over_previous_runtime": ["aiflow_0052", "aiflow_0090"],
+      "improved_over_candidate_context_runtime": [
+        "aiflow_0052", "aiflow_0058", "aiflow_0068", "aiflow_0086", "aiflow_0090"
+      ],
       "regressed_over_previous_runtime": [],
       "all_exact_stroke_cover": true,
       "all_tokens_inside_admitted_candidate_contract": true,
       "all_inserted_or_deleted_glyphs_zero": true,
-      "all_operator_relation_or_fence_mutations_zero": true,
+      "all_wide_numeric_replacements_are_digits": true,
+      "all_layout_mutations_zero": true,
       "all_product_defaults_disabled": true,
-      "output_sha256": "876b9ec3e5b4f0445324aa9c1b2840cced25d1a737980f4fa4072e1868405868"
+      "output_sha256": "819becccf7af73d5e39cd9aa41c2ea2f560e2c468d5ac6b4e1eada71fd489760"
     }
   },
   "code": {
@@ -66,6 +76,7 @@
   "limits": [
     "the chronological 49-formula set was inspected during posthoc selection",
     "the auxiliary HWR head was trained with the current 96 formulas",
+    "the wide numeric probability threshold was selected on the inspected chronological set",
     "single-glyph x/times remains unresolved because formula context is absent",
     "fresh commercial writer/formula-disjoint acceptance is required before product promotion"
   ]

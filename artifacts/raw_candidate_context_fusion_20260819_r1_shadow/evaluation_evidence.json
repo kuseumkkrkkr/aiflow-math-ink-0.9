@@ -1,6 +1,6 @@
 {
   "schema": "aiflow-raw-candidate-context-fusion-evaluation/v1",
-  "generated_at": "2026-08-19T15:20:09.3213452Z",
+  "generated_at": "2026-08-19T15:39:23.9167216Z",
   "status": "development_only_posthoc_shadow",
   "protocol": {
     "dataset_formulas": 96,
@@ -26,8 +26,10 @@
     "restricted_fusion_only_formula_exact": {"count": 39, "total": 49},
     "combined_formula_exact": {"count": 40, "total": 49, "rate": 0.8163265306122449},
     "dual_hwr_numeric_formula_exact": {"count": 41, "total": 49, "rate": 0.8367346938775511},
+    "wide_numeric_syntax_formula_exact": {"count": 42, "total": 49, "rate": 0.8571428571428571},
     "original_top5_formula_oracle": {"count": 41, "total": 49},
-    "dual_hwr_top5_union_formula_oracle": {"count": 46, "total": 49}
+    "dual_hwr_top5_union_formula_oracle": {"count": 46, "total": 49},
+    "product_fused_top10_union_formula_oracle": {"count": 47, "total": 49}
   },
   "comparison": {
     "singleton_improved": ["aiflow_0049"],
@@ -35,18 +37,17 @@
     "combined_improved": ["aiflow_0049", "aiflow_0078"],
     "combined_regressed": [],
     "dual_numeric_improved": ["aiflow_0049", "aiflow_0052", "aiflow_0078"],
-    "dual_numeric_regressed": []
+    "dual_numeric_regressed": [],
+    "wide_numeric_improved": ["aiflow_0049", "aiflow_0052", "aiflow_0058", "aiflow_0078"],
+    "wide_numeric_regressed": []
   },
   "remaining": {
     "grouping_failure": ["aiflow_0010"],
-    "truth_outside_dual_hwr_top5_union": [
-      "aiflow_0046",
-      "aiflow_0064"
-    ],
-    "unresolved_inside_dual_hwr_top5_union": [
+    "truth_outside_product_fused_top10_union": ["aiflow_0064"],
+    "unresolved_inside_product_fused_top10_union": [
       "aiflow_0004",
+      "aiflow_0046",
       "aiflow_0056",
-      "aiflow_0058",
       "aiflow_0061",
       "aiflow_0072"
     ]
@@ -57,17 +58,23 @@
     "restricted_context_original_top5_candidate_set_preserved": true,
     "dual_numeric_candidate_contract": "baseline_and_auxiliary_top5_union",
     "dual_numeric_maximum_operand_to_digit_changes": 2,
+    "wide_numeric_candidate_contract": "baseline_and_product_fused_top10_union",
+    "wide_numeric_unique_minimum_repair_required": true,
+    "wide_numeric_minimum_digit_probability_ratio": 0.005,
+    "wide_numeric_equality_replacement": false,
     "baseline_top5_expansions": 1,
-    "tokens_outside_dual_hwr_union": 0,
+    "tokens_outside_admitted_candidate_union": 0,
     "deleted_glyphs": 0,
     "grouping_mutations": 0,
-    "operator_relation_or_fence_mutations": 0,
+    "dual_numeric_operator_relation_or_fence_mutations": 0,
+    "wide_numeric_non_digit_replacements": 0,
+    "layout_mutations": 0,
     "arithmetic_evaluation": false,
     "product_default_enabled": false
   },
   "full_local_probe": {
-    "path": "artifacts/partition_context_ranker_20260820_r18_dual_numeric_probe/partition_context_ranker_summary.json",
-    "sha256": "b3f8e3789226173798470312991e3019295caa71e1ea9509cc3e2da319dd0ee3",
+    "path": "artifacts/partition_context_ranker_20260820_r21_operand_only_wide_probe/partition_context_ranker_summary.json",
+    "sha256": "9aa61c7b0cf73786b6426ba291e34a7d5022559ec976d328d8e7bef5f8a7f1ea",
     "selected_artifact": false
   }
 }

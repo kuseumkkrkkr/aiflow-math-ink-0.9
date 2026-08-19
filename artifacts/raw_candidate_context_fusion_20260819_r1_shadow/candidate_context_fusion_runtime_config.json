@@ -1,7 +1,7 @@
 {
   "schema": "aiflow-raw-candidate-context-fusion-runtime-config/v1",
   "rescue_schema": "aiflow-singleton-shape-rescue/v1",
-  "generated_at": "2026-08-19T15:20:09.3213452Z",
+  "generated_at": "2026-08-19T15:39:23.9167216Z",
   "status": "development_only_posthoc_shadow",
   "configuration": {
     "auxiliary_policy": "old_new_product_probability_fusion",
@@ -15,6 +15,18 @@
     "auxiliary_policy": "old_new_product_probability_fusion",
     "auxiliary_weight": 0.6,
     "maximum_operand_changes": 2
+  },
+  "wide_syntax_configuration": {
+    "candidate_width": 10,
+    "auxiliary_weight": 0.6,
+    "allowed_auxiliary_policies": ["old_new_product_probability_fusion"],
+    "minimum_baseline_digit_count": 2,
+    "maximum_changes": 2,
+    "maximum_formula_glyphs": 64,
+    "minimum_digit_probability_ratio": 0.005,
+    "equality_candidate_must_be_top1": true,
+    "allow_equality_replacement": false,
+    "literal_alpha_operand_lock": true
   },
   "mode": {
     "restricted_candidate_rerank": {
@@ -33,6 +45,15 @@
       "candidate_contract": "baseline_and_auxiliary_top5_union",
       "operator_relation_or_fence_mutations": 0,
       "arithmetic_evaluation": false
+    },
+    "wide_numeric_syntax_rescue": {
+      "enabled": true,
+      "candidate_width": 10,
+      "maximum_changes": 2,
+      "candidate_contract": "baseline_and_auxiliary_top10_union",
+      "minimum_digit_probability_ratio": 0.005,
+      "allow_equality_replacement": false,
+      "arithmetic_evaluation": false
     }
   },
   "artifacts": {
@@ -45,13 +66,14 @@
   },
   "evidence": {
     "selected_summary": "selected_summary.json",
-    "selected_summary_sha256": "2de232caddd797bc90793a409bec4a4b042c667ab7a9c33b169d486f3b49ab6e",
+    "selected_summary_sha256": "2ee569d7a86ae6a701f5c38e3d5c808ba320271919453dd60aaf367eaab69d4d",
     "evaluation_evidence": "evaluation_evidence.json",
-    "evaluation_evidence_sha256": "2917b40230da88ada8b0bb0bcacabaea5232343cf52f42c7969c61605fe2f7df",
+    "evaluation_evidence_sha256": "5e15ea1d6fdca8584147390945ba3ea317111d8d5433adb698a1d38a79fc1e39",
     "baseline_formula_exact": {"count": 38, "total": 49},
     "candidate_context_fusion_formula_exact": {"count": 40, "total": 49},
     "dual_hwr_numeric_formula_exact": {"count": 41, "total": 49},
-    "improved_formula_ids": ["aiflow_0049", "aiflow_0052", "aiflow_0078"],
+    "wide_numeric_syntax_formula_exact": {"count": 42, "total": 49},
+    "improved_formula_ids": ["aiflow_0049", "aiflow_0052", "aiflow_0058", "aiflow_0078"],
     "regressed_formula_ids": []
   },
   "provenance": {
@@ -67,10 +89,13 @@
       "formula_regressions_zero": true,
       "restricted_original_top5_preserved": true,
       "dual_numeric_top5_union_preserved": true,
-      "tokens_outside_dual_hwr_union_zero": true,
+      "wide_numeric_top10_union_preserved": true,
+      "tokens_outside_admitted_union_zero": true,
       "deleted_glyphs_zero": true,
       "grouping_mutations_zero": true,
-      "operator_relation_or_fence_mutations_zero": true,
+      "dual_numeric_operator_relation_or_fence_mutations_zero": true,
+      "wide_numeric_non_digit_replacements_zero": true,
+      "layout_mutations_zero": true,
       "arithmetic_evaluation_disabled": true
     }
   }

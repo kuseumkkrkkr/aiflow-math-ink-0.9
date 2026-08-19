@@ -114,6 +114,7 @@ def _finalized_map(rows: list[dict], kind: str) -> dict[str, dict]:
             "context_available": bool(source.get("context_available", context_index > 0)),
             "decision_status": str(source.get("decision_status", "finalized")),
             "decision_source": str(source.get("decision_source", kind)),
+            "changed": bool(source.get("changed", False)),
         }
     return output
 
@@ -250,7 +251,7 @@ def apply_dual_hwr_numeric_rescue(
             "baseline_top1": row["finalized_top1"],
             "auxiliary_top1": auxiliary_row["finalized_top1"],
             "finalized_top1": token,
-            "changed": changed,
+            "changed": bool(row["changed"] or changed),
             "baseline_top5": row["final_topk"],
             "baseline_top5_probabilities": row["final_topk_probabilities"],
             "auxiliary_top5": auxiliary_row["final_topk"],

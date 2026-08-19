@@ -25,7 +25,9 @@ SCHEMA = "aiflow-wide-candidate-syntax-rescue/v1"
 OUTPUT_SCHEMA = "aiflow-wide-candidate-syntax-finalized/v1"
 CONFIG_SCHEMA = "aiflow-wide-candidate-syntax-rescue-runtime-config/v1"
 DIGITS = frozenset("0123456789")
-BINARY = frozenset({"+", "-", "/", r"\times", r"\div", r"\cdot"})
+BINARY = frozenset({
+    "+", "-", "/", r"\times", r"\div", r"\cdot", r"\pm", r"\mp",
+})
 RELATIONS = frozenset({"=", "<", ">", r"\leq", r"\geq", r"\neq"})
 DEFAULT_CONFIGURATION = {
     "candidate_width": 10,
@@ -44,7 +46,11 @@ DEFAULT_CONFIGURATION = {
 
 
 def validate_configuration(configuration: dict) -> dict:
-    if set(configuration) != set(DEFAULT_CONFIGURATION):
+    optional = {"allow_equality_replacement"}
+    if frozenset(configuration) not in {
+        frozenset(DEFAULT_CONFIGURATION),
+        frozenset(DEFAULT_CONFIGURATION) | optional,
+    }:
         raise ValueError("wide syntax rescue configuration fields mismatch")
     width = int(configuration["candidate_width"])
     maximum = int(configuration["maximum_changes"])
@@ -68,8 +74,13 @@ def validate_configuration(configuration: dict) -> dict:
     if not policies or len(policies) != len(set(policies)) or any(not value for value in policies):
         raise ValueError("wide syntax rescue auxiliary policies are invalid")
     equality_top1 = configuration["equality_candidate_must_be_top1"]
+    equality_replacement = configuration.get("allow_equality_replacement", True)
     literal_alpha_lock = configuration["literal_alpha_operand_lock"]
-    if type(equality_top1) is not bool or type(literal_alpha_lock) is not bool:
+    if (
+        type(equality_top1) is not bool
+        or type(equality_replacement) is not bool
+        or type(literal_alpha_lock) is not bool
+    ):
         raise ValueError("wide syntax rescue lock fields must be boolean")
     return {
         "candidate_width": width,
@@ -80,6 +91,7 @@ def validate_configuration(configuration: dict) -> dict:
         "maximum_formula_glyphs": maximum_formula_glyphs,
         "minimum_digit_probability_ratio": ratio,
         "equality_candidate_must_be_top1": equality_top1,
+        "allow_equality_replacement": equality_replacement,
         "literal_alpha_operand_lock": literal_alpha_lock,
     }
 
@@ -199,7 +211,8 @@ def _options(before: str, row: dict, configuration: dict) -> list[str]:
         if digit_options:
             options.append(max(digit_options)[1])
     equality_allowed = (
-        "=" in row["tokens"]
+        configuration["allow_equality_replacement"]
+        and "=" in row["tokens"]
         and before != "="
         and (
             not configuration["equality_candidate_must_be_top1"]
@@ -314,6 +327,7 @@ def apply_wide_candidate_syntax_rescue(
             "baseline_top1_before_wide_syntax": row["finalized_top1"],
             "finalized_top1": token,
             "changed_by_wide_syntax": changed,
+            "changed": bool(row.get("changed", False) or changed),
             "decision_source": (
                 "wide_candidate_syntax_rescue_v1"
                 if changed else str(row.get("decision_source", "baseline"))
@@ -354,6 +368,7 @@ def _write(path: Path, rows: list[dict]) -> None:
 
 
 def _self_test() -> None:
+    assert valid_numeric_sequence(["6", "+", "8", r"\mp", "1", "4"])
     def candidate(index: int, before: str, options: list[str], probabilities: list[float]) -> dict:
         return {
             "record_id": f"r{index}", "formula_id": "f",
@@ -389,6 +404,19 @@ def _self_test() -> None:
         alpha_baseline, alpha_candidates,
     )
     assert preserved[2]["finalized_top1"] == "b" and audit["changed_glyphs"] == 0
+    equality_baseline = [dict(row) for row in baseline]
+    equality_baseline[2]["finalized_top1"] = "1"
+    equality_baseline[3]["finalized_top1"] = r"\approx"
+    equality_candidates = [dict(row) for row in candidates]
+    equality_candidates[3] = candidate(3, r"\approx", ["=", r"\approx"], [0.9, 0.1])
+    equality_disabled = {
+        **DEFAULT_CONFIGURATION, "allow_equality_replacement": False,
+    }
+    preserved, audit = apply_wide_candidate_syntax_rescue(
+        equality_baseline, equality_candidates, equality_disabled,
+    )
+    assert preserved[3]["finalized_top1"] == r"\approx"
+    assert audit["changed_glyphs"] == 0
 
 
 def main() -> int:

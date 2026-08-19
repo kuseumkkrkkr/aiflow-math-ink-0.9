@@ -1,6 +1,6 @@
 {
   "schema": "aiflow-raw-candidate-context-fusion-selection/v1",
-  "generated_at": "2026-08-19T15:20:09.3213452Z",
+  "generated_at": "2026-08-19T15:39:23.9167216Z",
   "status": "development_only_posthoc_shadow",
   "dataset": {
     "formulas": 96,
@@ -22,7 +22,8 @@
     "reorder only the original Top-5 candidate set",
     "masked-context, layout, semantic, sequence, and syntax finalizer",
     "singleton slash/times rescue only within the original Top-5",
-    "numeric operand rescue only from the baseline and auxiliary Top-5 union"
+    "numeric operand rescue only from the baseline and auxiliary Top-5 union",
+    "unique minimum numeric-syntax repair only from the product-fused Top-10 union"
   ],
   "scores": {
     "grouping_exact": {"count": 48, "total": 49, "rate": 0.9795918367346939},
@@ -30,30 +31,31 @@
     "selected_finalizer_baseline": {"count": 38, "total": 49, "rate": 0.7755102040816326},
     "candidate_context_fusion_final": {"count": 40, "total": 49, "rate": 0.8163265306122449},
     "dual_hwr_numeric_final": {"count": 41, "total": 49, "rate": 0.8367346938775511},
+    "wide_numeric_syntax_final": {"count": 42, "total": 49, "rate": 0.8571428571428571},
     "original_top5_formula_oracle": {"count": 41, "total": 49, "rate": 0.8367346938775511},
-    "dual_hwr_top5_union_formula_oracle": {"count": 46, "total": 49, "rate": 0.9387755102040817}
+    "dual_hwr_top5_union_formula_oracle": {"count": 46, "total": 49, "rate": 0.9387755102040817},
+    "product_fused_top10_union_formula_oracle": {"count": 47, "total": 49, "rate": 0.9591836734693877}
   },
   "comparison": {
-    "improved_formula_ids": ["aiflow_0049", "aiflow_0052", "aiflow_0078"],
+    "improved_formula_ids": ["aiflow_0049", "aiflow_0052", "aiflow_0058", "aiflow_0078"],
     "regressed_formula_ids": [],
-    "exact_delta": 3,
+    "exact_delta": 4,
     "baseline_top5_expansions": 1,
     "tokens_outside_dual_hwr_union": 0,
     "deleted_glyphs": 0,
     "grouping_mutations": 0,
-    "operator_relation_or_fence_mutations": 0
+    "dual_numeric_operator_relation_or_fence_mutations": 0,
+    "wide_numeric_non_digit_replacements": 0,
+    "layout_mutations": 0
   },
   "remaining_failures": {
-    "count": 8,
+    "count": 7,
     "grouping_failure": ["aiflow_0010"],
-    "truth_outside_dual_hwr_top5_union": [
-      "aiflow_0046",
-      "aiflow_0064"
-    ],
-    "unresolved_inside_dual_hwr_top5_union": [
+    "truth_outside_product_fused_top10_union": ["aiflow_0064"],
+    "unresolved_inside_product_fused_top10_union": [
       "aiflow_0004",
+      "aiflow_0046",
       "aiflow_0056",
-      "aiflow_0058",
       "aiflow_0061",
       "aiflow_0072"
     ]
@@ -64,28 +66,36 @@
     "restricted_context_original_top5_candidate_set_preserved": true,
     "dual_numeric_candidate_contract": "baseline_and_auxiliary_top5_union",
     "dual_numeric_maximum_operand_to_digit_changes": 2,
-    "operator_relation_or_fence_mutations": 0,
+    "wide_numeric_candidate_contract": "baseline_and_product_fused_top10_union",
+    "wide_numeric_unique_minimum_repair_required": true,
+    "wide_numeric_minimum_digit_probability_ratio": 0.005,
+    "wide_numeric_equality_replacement": false,
+    "dual_numeric_operator_relation_or_fence_mutations": 0,
+    "wide_numeric_non_digit_replacements": 0,
+    "layout_mutations": 0,
     "arithmetic_evaluation": false,
     "product_default_enabled": false
   },
   "raw_runtime_validation": {
     "input_valid_formulas": 159,
-    "chronological_test_formula_exact": {"count": 41, "total": 49, "rate": 0.8367346938775511},
+    "chronological_test_formula_exact": {"count": 42, "total": 49, "rate": 0.8571428571428571},
     "all_strokes_exactly_once": true,
     "all_tokens_inside_admitted_candidate_contract": true,
     "all_inserted_or_deleted_glyphs_zero": true,
-    "all_operator_relation_or_fence_mutations_zero": true,
+    "all_wide_numeric_replacements_are_digits": true,
+    "all_layout_mutations_zero": true,
     "all_product_defaults_disabled": true
   },
   "limits": [
     "the 49-formula set was repeatedly inspected while selecting this posthoc shadow layer",
     "the auxiliary HWR head overlaps all current 96 formulas and is not independent acceptance evidence",
     "the dual numeric gate expands one baseline Top-5 only through the admitted auxiliary Top-5 union",
+    "the wide numeric gate was threshold-selected on the repeatedly inspected 49-formula set",
     "a single-glyph x/times homograph has no formula context and remains unresolved",
     "fresh commercial project-owned writer/formula-disjoint acceptance is required before product default"
   ],
   "source_probe": {
     "path": "evaluation_evidence.json",
-    "sha256": "2917b40230da88ada8b0bb0bcacabaea5232343cf52f42c7969c61605fe2f7df"
+    "sha256": "5e15ea1d6fdca8584147390945ba3ea317111d8d5433adb698a1d38a79fc1e39"
   }
 }

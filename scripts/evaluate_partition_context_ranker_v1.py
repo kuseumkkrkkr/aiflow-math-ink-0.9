@@ -24,6 +24,10 @@ from dual_hwr_numeric_rescue_v1 import (
     apply_dual_hwr_numeric_rescue,
     validate_configuration as validate_dual_numeric_configuration,
 )
+from wide_candidate_syntax_rescue_v1 import (
+    apply_wide_candidate_syntax_rescue,
+    validate_configuration as validate_wide_syntax_configuration,
+)
 from finalize_formula_context_v1 import OwnedFormulaContextFinalizer
 from formula_placement_rescue_v1 import (
     CONFIG_SCHEMA as PLACEMENT_CONFIG_SCHEMA, SCHEMA as PLACEMENT_SCHEMA,
@@ -83,6 +87,18 @@ PRODUCT_DUAL_NUMERIC_CONFIGURATION = {
     "auxiliary_policy": "old_new_product_probability_fusion",
     "auxiliary_weight": 0.6,
     "maximum_operand_changes": 2,
+}
+PRODUCT_WIDE_SYNTAX_CONFIGURATION = {
+    "candidate_width": 10,
+    "auxiliary_weight": 0.6,
+    "allowed_auxiliary_policies": ["old_new_product_probability_fusion"],
+    "minimum_baseline_digit_count": 2,
+    "maximum_changes": 2,
+    "maximum_formula_glyphs": 64,
+    "minimum_digit_probability_ratio": 0.005,
+    "equality_candidate_must_be_top1": True,
+    "allow_equality_replacement": False,
+    "literal_alpha_operand_lock": True,
 }
 
 
@@ -474,6 +490,10 @@ def _score_finalized(
     numeric_finalizer_audit = {"enabled": False}
     numeric_improved: list[str] = []
     numeric_regressed: list[str] = []
+    wide_score = None
+    wide_audit = {"enabled": False}
+    wide_improved: list[str] = []
+    wide_regressed: list[str] = []
     if singleton_auxiliary is not None:
         singleton_rows = _auxiliary_rows(
             samples, selected, singleton_auxiliary["probability"],
@@ -566,6 +586,34 @@ def _score_finalized(
         }
         numeric_improved = sorted(base_failures - numeric_failures)
         numeric_regressed = sorted(numeric_failures - base_failures)
+        wide_rows = _auxiliary_rows(
+            samples, selected, singleton_auxiliary["probability"],
+            singleton_auxiliary["slices"], singleton_auxiliary["labels"], width=10,
+            policy=singleton_auxiliary["policy"],
+            weight=singleton_auxiliary["weight"],
+        )
+        wide_finalized, wide_audit = apply_wide_candidate_syntax_rescue(
+            numeric_rows, wide_rows, singleton_auxiliary["wide_configuration"],
+        )
+        numeric_candidates = {
+            str(row["record_id"]): list(row["candidate_union"])
+            for row in numeric_rows
+        }
+        wide_union_candidates = []
+        for row in wide_rows:
+            candidates = list(numeric_candidates[str(row["record_id"])])
+            candidates.extend(
+                token for token in row["final_topk"] if token not in candidates
+            )
+            wide_union_candidates.append({
+                "record_id": row["record_id"], "final_topk": candidates,
+            })
+        wide_score = score(wide_finalized, wide_union_candidates)
+        wide_failures = {
+            str(row["sample_id"]) for row in wide_score["failures"]
+        }
+        wide_improved = sorted(base_failures - wide_failures)
+        wide_regressed = sorted(wide_failures - base_failures)
     placement_audit = equality_audit = {"enabled": False}
     auxiliary_rows = None
     placement_score = equality_score = None
@@ -584,7 +632,7 @@ def _score_finalized(
         )
         equality_score = score(final_rows, auxiliary_rows)
     total = len(samples)
-    final_score = equality_score or numeric_score or combined_score or singleton_score or base
+    final_score = equality_score or wide_score or numeric_score or combined_score or singleton_score or base
     result = {
         "formula_exact_count": base["exact"],
         "formula_exact": base["exact"] / total,
@@ -607,6 +655,7 @@ def _score_finalized(
             "restricted_product_fusion_finalizer": restricted_fusion_audit,
             "dual_numeric_auxiliary_finalizer": numeric_finalizer_audit,
             "dual_numeric_rescue": numeric_audit,
+            "wide_numeric_syntax_rescue": wide_audit,
             "formula_placement": placement_audit,
             "straight_equality": equality_audit,
         },
@@ -639,6 +688,13 @@ def _score_finalized(
             "dual_numeric_formula_exact": numeric_score["exact"] / total,
             "dual_numeric_improved": numeric_improved,
             "dual_numeric_regressed": numeric_regressed,
+        })
+    if wide_score is not None:
+        result.update({
+            "wide_numeric_formula_exact_count": wide_score["exact"],
+            "wide_numeric_formula_exact": wide_score["exact"] / total,
+            "wide_numeric_improved": wide_improved,
+            "wide_numeric_regressed": wide_regressed,
         })
     if auxiliary_rows is not None and placement_score is not None and equality_score is not None:
         result.update({
@@ -821,6 +877,9 @@ def main() -> int:
         numeric_configuration = validate_dual_numeric_configuration(
             PRODUCT_DUAL_NUMERIC_CONFIGURATION,
         )
+        wide_configuration = validate_wide_syntax_configuration(
+            PRODUCT_WIDE_SYNTAX_CONFIGURATION,
+        )
         singleton_probability = _probabilities(
             singleton_hwr.math_head, embeddings, device,
         )
@@ -836,12 +895,14 @@ def main() -> int:
             "weight": singleton_weight,
             "configuration": configuration,
             "numeric_configuration": numeric_configuration,
+            "wide_configuration": wide_configuration,
         }
         singleton_contract = {
             "enabled": True,
             "rescue_schema": SINGLETON_SCHEMA,
             "configuration": configuration,
             "numeric_configuration": numeric_configuration,
+            "wide_configuration": wide_configuration,
             "auxiliary_hwr_checkpoint_sha256": _sha256(singleton_hwr_path),
             "current_96_formula_training_overlap": True,
         }
