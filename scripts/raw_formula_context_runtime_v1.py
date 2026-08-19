@@ -42,12 +42,19 @@ from straight_equality_slot_rescue_v1 import (
     apply_straight_equality_slot_rescue,
     validate_configuration as validate_equality_configuration,
 )
+from latin_t_context_rescue_v1 import (
+    apply_latin_t_context_rescue, build_latin_auxiliary_rows,
+    load_latin_auxiliary_model,
+    validate_configuration as validate_latin_t_configuration,
+)
 from evaluate_partition_context_ranker_v1 import (
     FEATURE_NAMES, POSTHOC_DESIGN_GUARD, SCHEMA as RANKER_SCHEMA,
     _apply_cross_merge_token_locks, _attach_features, _auxiliary_rows,
     _cross_merge_selection, _gate_accept, _geometry_selection, _partition_rows,
-    _relation_merge_selection, _select, _shadow_configuration,
+    _relation_merge_selection, _repeat_merge_selection, _select,
+    _shadow_configuration,
     _validate_cross_merge_configuration, _validate_relation_merge_configuration,
+    _validate_repeat_merge_configuration,
 )
 from finalize_formula_context_v1 import DEFAULT_CONTEXT, OwnedFormulaContextFinalizer
 from singleton_shape_rescue_v1 import (
@@ -161,8 +168,13 @@ class RawFormulaContextRuntimeV1:
     wide_syntax_configuration: dict[str, Any] | None
     relation_merge_configuration: dict[str, Any] | None
     cross_merge_configuration: dict[str, Any] | None
+    repeat_merge_configuration: dict[str, Any] | None
     placement_configuration: dict[str, Any] | None
     equality_configuration: dict[str, Any] | None
+    latin_hwr: Any | None
+    latin_labels: list[str] | None
+    latin_configuration: dict[str, Any] | None
+    latin_hwr_sha256: str | None
     singleton_config_sha256: str | None
     singleton_hwr_sha256: str | None
 
@@ -176,6 +188,7 @@ class RawFormulaContextRuntimeV1:
         candidate_context_auxiliary_hwr_checkpoint: Path | None = None,
         formula_placement_config: Path | None = None,
         straight_equality_config: Path | None = None,
+        latin_auxiliary_checkpoint: Path | None = None,
         allow_posthoc_shadow: bool = False,
     ) -> "RawFormulaContextRuntimeV1":
         ranker_path = Path(partition_ranker).expanduser().resolve()
@@ -255,8 +268,13 @@ class RawFormulaContextRuntimeV1:
         wide_syntax_configuration = None
         relation_merge_configuration = None
         cross_merge_configuration = None
+        repeat_merge_configuration = None
         placement_configuration = None
         equality_configuration = None
+        latin_hwr = None
+        latin_labels = None
+        latin_configuration = None
+        latin_hwr_sha256 = None
         singleton_config_sha256 = None
         singleton_hwr_sha256 = None
         if candidate_context_fusion_config is not None:
@@ -280,8 +298,10 @@ class RawFormulaContextRuntimeV1:
             wide_syntax_mode = dict(mode.get("wide_numeric_syntax_rescue") or {})
             relation_merge_mode = dict(mode.get("relation_merge_rescue") or {})
             cross_merge_mode = dict(mode.get("cross_merge_rescue") or {})
+            repeat_merge_mode = dict(mode.get("repeat_merge_rescue") or {})
             placement_mode = dict(mode.get("formula_placement_rescue") or {})
             equality_mode = dict(mode.get("straight_equality_rescue") or {})
+            latin_mode = dict(mode.get("latin_t_context_rescue") or {})
             if (
                 singleton_payload.get("schema") != CANDIDATE_FUSION_CONFIG_SCHEMA
                 or singleton_payload.get("rescue_schema") != SINGLETON_SCHEMA
@@ -353,6 +373,38 @@ class RawFormulaContextRuntimeV1:
                     ] is not True
                 ):
                     raise ValueError("candidate context cross merge configuration mismatch")
+            repeat_payload = singleton_payload.get("repeat_merge_configuration")
+            if bool(repeat_payload) != bool(repeat_merge_mode):
+                raise ValueError("candidate context repeat merge presence mismatch")
+            if repeat_payload:
+                repeat_merge_configuration = _validate_repeat_merge_configuration(
+                    dict(repeat_payload),
+                )
+                if repeat_merge_mode != {
+                    "enabled": True,
+                    "maximum_candidate_rank": 3,
+                    "exact_cover_coarsening_only": True,
+                    "required_merged_strokes": 2,
+                    "required_formula_glyphs": 3,
+                    "same_formula_repeated_shape_dtw_required": True,
+                    "hwr_context_agreement_required": True,
+                    "preserve_merged_token_after_auxiliary_fusion": True,
+                    "target_label_or_glyph_count_input": False,
+                    "arithmetic_evaluation": False,
+                }:
+                    raise ValueError("candidate context repeat merge mode mismatch")
+                if (
+                    repeat_merge_configuration["maximum_candidate_rank"]
+                    != repeat_merge_mode["maximum_candidate_rank"]
+                    or repeat_merge_configuration["required_merged_strokes"]
+                    != repeat_merge_mode["required_merged_strokes"]
+                    or repeat_merge_configuration["required_formula_glyphs"]
+                    != repeat_merge_mode["required_formula_glyphs"]
+                    or repeat_merge_configuration[
+                        "preserve_merged_token_after_auxiliary_fusion"
+                    ] is not True
+                ):
+                    raise ValueError("candidate context repeat merge configuration mismatch")
             placement_paths_present = (
                 formula_placement_config is not None
                 and straight_equality_config is not None
@@ -394,6 +446,36 @@ class RawFormulaContextRuntimeV1:
                     "arithmetic_evaluation": False,
                 }:
                     raise ValueError("candidate context placement mode mismatch")
+            latin_payload = singleton_payload.get("latin_t_context_configuration")
+            if bool(latin_payload) != bool(latin_mode):
+                raise ValueError("candidate context Latin t rescue presence mismatch")
+            if bool(latin_payload) != bool(latin_auxiliary_checkpoint):
+                raise ValueError(
+                    "candidate context Latin t config and checkpoint are required together"
+                )
+            latin_path = None
+            if latin_payload:
+                latin_configuration = validate_latin_t_configuration(
+                    dict(latin_payload),
+                )
+                if latin_mode != {
+                    "enabled": True,
+                    "candidate_width": 5,
+                    "candidate_contract": "approved_legacy_latin_auxiliary_top5",
+                    "target_token": "t",
+                    "single_parenthesized_function_argument_only": True,
+                    "insertions_or_deletions": 0,
+                    "target_label_or_glyph_count_input": False,
+                    "arithmetic_evaluation": False,
+                }:
+                    raise ValueError("candidate context Latin t mode mismatch")
+                latin_path = Path(latin_auxiliary_checkpoint).expanduser().resolve()
+                if not latin_path.is_file():
+                    raise FileNotFoundError(latin_path)
+                latin_hwr, latin_labels = load_latin_auxiliary_model(
+                    latin_path, resolved_device,
+                )
+                latin_hwr_sha256 = _sha256(latin_path)
             expected_hashes = {
                 "partition_ranker_sha256": _sha256(ranker_path),
                 "hwr_checkpoint_sha256": _sha256(hwr_path),
@@ -405,6 +487,10 @@ class RawFormulaContextRuntimeV1:
                     "formula_placement_config_sha256": _sha256(placement_path),
                     "straight_equality_config_sha256": _sha256(equality_path),
                 })
+            if latin_path is not None:
+                expected_hashes["latin_auxiliary_checkpoint_sha256"] = _sha256(
+                    latin_path,
+                )
             if any(artifacts.get(key) != value for key, value in expected_hashes.items()):
                 raise ValueError("candidate context fusion artifact hash mismatch")
             evidence = dict(singleton_payload.get("evidence") or {})
@@ -485,8 +571,10 @@ class RawFormulaContextRuntimeV1:
             payload, hwr, labels, finalizer, resolved_device, _sha256(ranker_path),
             singleton_hwr, singleton_configuration, numeric_configuration,
             wide_syntax_configuration, relation_merge_configuration,
-            cross_merge_configuration, placement_configuration,
+            cross_merge_configuration, repeat_merge_configuration,
+            placement_configuration,
             equality_configuration,
+            latin_hwr, latin_labels, latin_configuration, latin_hwr_sha256,
             singleton_config_sha256,
             singleton_hwr_sha256,
         )
@@ -567,6 +655,16 @@ class RawFormulaContextRuntimeV1:
             )
             selected = cross_selected[sample.sample_id]
         cross_merge_changed = bool(cross_merge_audit.get("changed_formulas", 0))
+        repeat_merge_audit = {"enabled": False}
+        if self.repeat_merge_configuration is not None:
+            repeat_selected, repeat_merge_audit = _repeat_merge_selection(
+                partitions, {sample.sample_id: selected},
+                self.repeat_merge_configuration,
+            )
+            selected = repeat_selected[sample.sample_id]
+        repeat_merge_changed = bool(
+            repeat_merge_audit.get("changed_formulas", 0)
+        )
         runtime_rows = [
             {
                 **{
@@ -634,6 +732,15 @@ class RawFormulaContextRuntimeV1:
                 finalized, equality_audit = apply_straight_equality_slot_rescue(
                     finalized, top20_rows, self.equality_configuration,
                 )
+            latin_audit = {"enabled": False}
+            if self.latin_hwr is not None:
+                latin_rows = build_latin_auxiliary_rows(
+                    [sample], {sample.sample_id: selected}, self.latin_hwr,
+                    self.latin_labels, self.device,
+                )
+                finalized, latin_audit = apply_latin_t_context_rescue(
+                    finalized, latin_rows, self.latin_configuration,
+                )
             finalized, cross_lock_audit = _apply_cross_merge_token_locks(
                 finalized, {sample.sample_id: selected},
             )
@@ -650,10 +757,12 @@ class RawFormulaContextRuntimeV1:
                 "wide_numeric_syntax_rescue": wide_syntax_audit,
                 "formula_placement_rescue": placement_audit,
                 "straight_equality_rescue": equality_audit,
+                "latin_t_context_rescue": latin_audit,
                 "cross_merge_auxiliary_semantic_lock": cross_lock_audit,
             }
         else:
             finalized, finalizer_audit = self.finalizer.finalize(runtime_rows)
+            latin_audit = {"enabled": False}
             finalized, cross_lock_audit = _apply_cross_merge_token_locks(
                 finalized, {sample.sample_id: selected},
             )
@@ -725,6 +834,7 @@ class RawFormulaContextRuntimeV1:
                 "partition_change_accepted": bool(selected["rank"] != baseline["rank"]),
                 "design_gate_partition_change_accepted": bool(accepted),
                 "partition_change_source": (
+                    "repeat_merge_rescue" if repeat_merge_changed else
                     "relation_merge_rescue" if relation_merge_changed else
                     "cross_merge_rescue" if cross_merge_changed else
                     "posthoc_design_guard" if accepted else "geometry_baseline"
@@ -746,6 +856,7 @@ class RawFormulaContextRuntimeV1:
                     **singleton_audit,
                     "relation_merge_rescue": relation_merge_audit,
                     "cross_merge_rescue": cross_merge_audit,
+                    "repeat_merge_rescue": repeat_merge_audit,
                     "enabled": self.singleton_hwr is not None,
                     "configuration_sha256": self.singleton_config_sha256,
                     "auxiliary_hwr_checkpoint_sha256": self.singleton_hwr_sha256,
@@ -828,6 +939,7 @@ def main() -> int:
     parser.add_argument("--candidate-context-auxiliary-hwr-checkpoint", type=Path)
     parser.add_argument("--formula-placement-config", type=Path)
     parser.add_argument("--straight-equality-config", type=Path)
+    parser.add_argument("--latin-auxiliary-checkpoint", type=Path)
     parser.add_argument("--input", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
@@ -858,6 +970,7 @@ def main() -> int:
         candidate_context_auxiliary_hwr_checkpoint=args.candidate_context_auxiliary_hwr_checkpoint,
         formula_placement_config=args.formula_placement_config,
         straight_equality_config=args.straight_equality_config,
+        latin_auxiliary_checkpoint=args.latin_auxiliary_checkpoint,
         allow_posthoc_shadow=args.allow_posthoc_shadow,
     )
     results = [runtime.infer(row) for row in _load_inputs(input_path)]

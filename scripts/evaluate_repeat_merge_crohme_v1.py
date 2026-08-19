@@ -1,0 +1,273 @@
+#!/usr/bin/env python3
+"""Run new candidate-preserving formula guards on raw CROHME strokes.
+
+CROHME is used only as a repeated noncommercial diagnostic.  The evaluator
+passes no truth, writer, or target glyph count into inference and reruns the
+pre-merge baseline only for formulas whose selected partition changed.
+"""
+
+from __future__ import annotations
+
+import argparse
+from copy import deepcopy
+from dataclasses import replace
+from datetime import datetime, timezone
+import json
+from pathlib import Path
+
+from audit_replay_protocol_v1 import CROHME_ALIASES, DEFAULT_CROHME, _crohme_sample
+from evaluate_48hz_prefix_v1 import _sha256
+from raw_formula_context_runtime_v1 import RawFormulaContextRuntimeV1
+from replay_evaluate_hwr_v1 import load_crohme
+
+
+SCHEMA = "aiflow-formula-context-crohme-diagnostic/v1"
+TICK_MS = 1000.0 / 48.0
+
+
+def _source(formula_id: str, sample: dict) -> dict:
+    tick = 0
+    strokes = []
+    for order, stroke in enumerate(sample["strokes"]):
+        points = []
+        for x, y, _ in stroke:
+            points.append({"x": float(x), "y": float(y), "t_ms": tick * TICK_MS})
+            tick += 1
+        strokes.append({"order": order, "points": points})
+    return {"formula_id": formula_id, "strokes": strokes}
+
+
+def _grouping_exact(result: dict, truth_groups: list[list[int]]) -> bool:
+    selected = {frozenset(row["stroke_indices"]) for row in result["groups"]}
+    truth = {frozenset(int(value) for value in group) for group in truth_groups}
+    return selected == truth
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--partition-ranker", type=Path, required=True)
+    parser.add_argument("--hwr-checkpoint", type=Path, required=True)
+    parser.add_argument("--context-checkpoint", type=Path, required=True)
+    parser.add_argument("--formula-sequence-config", type=Path, required=True)
+    parser.add_argument("--formula-syntax-rescue-config", type=Path, required=True)
+    parser.add_argument("--candidate-context-fusion-config", type=Path, required=True)
+    parser.add_argument("--candidate-context-auxiliary-hwr-checkpoint", type=Path, required=True)
+    parser.add_argument("--formula-placement-config", type=Path, required=True)
+    parser.add_argument("--straight-equality-config", type=Path, required=True)
+    parser.add_argument("--latin-auxiliary-checkpoint", type=Path, required=True)
+    parser.add_argument("--crohme", type=Path, default=DEFAULT_CROHME)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
+    args = parser.parse_args()
+    output = args.output.expanduser().resolve()
+    crohme = args.crohme.expanduser().resolve()
+    if output.exists() or output.drive.upper() != "D:":
+        parser.error("output must be a new file on D:")
+    if not crohme.is_dir():
+        parser.error("CROHME root is missing")
+    runtime = RawFormulaContextRuntimeV1.from_artifacts(
+        args.partition_ranker, args.hwr_checkpoint, args.context_checkpoint,
+        device=args.device,
+        formula_sequence_config=args.formula_sequence_config,
+        formula_syntax_rescue_config=args.formula_syntax_rescue_config,
+        candidate_context_fusion_config=args.candidate_context_fusion_config,
+        candidate_context_auxiliary_hwr_checkpoint=(
+            args.candidate_context_auxiliary_hwr_checkpoint
+        ),
+        formula_placement_config=args.formula_placement_config,
+        straight_equality_config=args.straight_equality_config,
+        latin_auxiliary_checkpoint=args.latin_auxiliary_checkpoint,
+        allow_posthoc_shadow=True,
+    )
+    if runtime.repeat_merge_configuration is None:
+        raise ValueError("repeat merge configuration is not enabled")
+    if runtime.latin_configuration is None:
+        raise ValueError("Latin t context configuration is not enabled")
+    baseline_equality = deepcopy(runtime.equality_configuration)
+    baseline_equality["single_glyph_component_pair"]["enabled"] = False
+    baseline_runtime = replace(
+        runtime,
+        repeat_merge_configuration=None,
+        equality_configuration=baseline_equality,
+        latin_hwr=None,
+        latin_labels=None,
+        latin_configuration=None,
+        latin_hwr_sha256=None,
+    )
+    protocol, duplicates = load_crohme(crohme)
+    labels = set(runtime.labels)
+    eligible = []
+    skipped = {
+        "missing_truth_partition": 0,
+        "incomplete_truth_partition": 0,
+        "unsupported_truth_label": 0,
+        "single_point_source_stroke": 0,
+    }
+    for formula in protocol:
+        formula_id = str(formula["record_id"])
+        sample = _crohme_sample(crohme / formula_id)
+        if sample is None:
+            skipped["missing_truth_partition"] += 1
+            continue
+        if not sample["partition_complete"]:
+            skipped["incomplete_truth_partition"] += 1
+            continue
+        truth_tokens = [CROHME_ALIASES.get(str(value), str(value)) for value in sample["labels"]]
+        if any(token not in labels for token in truth_tokens):
+            skipped["unsupported_truth_label"] += 1
+            continue
+        if any(len(stroke) < 2 for stroke in sample["strokes"]):
+            skipped["single_point_source_stroke"] += 1
+            continue
+        eligible.append((formula_id, sample, truth_tokens))
+
+    candidate_results = {}
+    changed_ids = []
+    repeat_changed_ids = []
+    single_equality_changed_ids = []
+    latin_t_changed_ids = []
+    for formula_id, sample, _truth_tokens in eligible:
+        result = runtime.infer(_source(formula_id, sample))
+        candidate_results[formula_id] = result
+        fusion_audit = result["audit"]["candidate_context_fusion"]
+        if fusion_audit["repeat_merge_rescue"].get("changed_formulas", 0):
+            repeat_changed_ids.append(formula_id)
+        equality_changes = fusion_audit["straight_equality_rescue"].get("changes", [])
+        if any(
+            change.get("rule") == "single_glyph_aligned_straight_component_pair"
+            for change in equality_changes
+        ):
+            single_equality_changed_ids.append(formula_id)
+        if fusion_audit["latin_t_context_rescue"].get("changed_formulas", 0):
+            latin_t_changed_ids.append(formula_id)
+        if (
+            formula_id in repeat_changed_ids
+            or formula_id in single_equality_changed_ids
+            or formula_id in latin_t_changed_ids
+        ):
+            changed_ids.append(formula_id)
+    baseline_results = {
+        formula_id: baseline_runtime.infer(_source(formula_id, sample))
+        for formula_id, sample, _truth_tokens in eligible
+        if formula_id in set(changed_ids)
+    }
+    grouping_before = grouping_after = formula_before = formula_after = 0
+    grouping_improved = []; grouping_regressed = []
+    formula_improved = []; formula_regressed = []
+    changes = []
+    for formula_id, sample, truth_tokens in eligible:
+        candidate = candidate_results[formula_id]
+        baseline = baseline_results.get(formula_id, candidate)
+        before_group = _grouping_exact(baseline, sample["groups"])
+        after_group = _grouping_exact(candidate, sample["groups"])
+        before_formula = baseline["finalized_tokens"] == truth_tokens
+        after_formula = candidate["finalized_tokens"] == truth_tokens
+        grouping_before += before_group; grouping_after += after_group
+        formula_before += before_formula; formula_after += after_formula
+        if after_group and not before_group:
+            grouping_improved.append(formula_id)
+        if before_group and not after_group:
+            grouping_regressed.append(formula_id)
+        if after_formula and not before_formula:
+            formula_improved.append(formula_id)
+        if before_formula and not after_formula:
+            formula_regressed.append(formula_id)
+        if formula_id in baseline_results:
+            changes.append({
+                "formula_id": formula_id,
+                "truth_tokens": truth_tokens,
+                "before_tokens": baseline["finalized_tokens"],
+                "after_tokens": candidate["finalized_tokens"],
+                "before_groups": [row["stroke_indices"] for row in baseline["groups"]],
+                "after_groups": [row["stroke_indices"] for row in candidate["groups"]],
+                "repeat_merge_audit": candidate["audit"]["candidate_context_fusion"][
+                    "repeat_merge_rescue"
+                ],
+                "straight_equality_audit": candidate["audit"]["candidate_context_fusion"][
+                    "straight_equality_rescue"
+                ],
+                "latin_t_context_audit": candidate["audit"]["candidate_context_fusion"][
+                    "latin_t_context_rescue"
+                ],
+            })
+    report = {
+        "schema": SCHEMA,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "status": "repeated_noncommercial_diagnostic_only",
+        "training_performed": False,
+        "product_validation": False,
+        "dataset": "CROHME CC BY-NC repeated raw-stroke diagnostic only",
+        "coverage": {
+            "protocol_formulas": len(protocol),
+            "exact_formula_duplicates_removed": len(duplicates),
+            "eligible_formulas": len(eligible),
+            "skipped": skipped,
+        },
+        "scores": {
+            "grouping_exact_before": grouping_before,
+            "grouping_exact_after": grouping_after,
+            "formula_exact_before": formula_before,
+            "formula_exact_after": formula_after,
+            "grouping_improved": grouping_improved,
+            "grouping_regressed": grouping_regressed,
+            "formula_improved": formula_improved,
+            "formula_regressed": formula_regressed,
+        },
+        "repeat_merge": {
+            "changed_formulas": len(repeat_changed_ids),
+            "changed_formula_ids": sorted(repeat_changed_ids),
+        },
+        "single_glyph_equality": {
+            "changed_formulas": len(single_equality_changed_ids),
+            "changed_formula_ids": sorted(single_equality_changed_ids),
+        },
+        "latin_t_context": {
+            "changed_formulas": len(latin_t_changed_ids),
+            "changed_formula_ids": sorted(latin_t_changed_ids),
+        },
+        "current_loop": {
+            "changed_formulas": len(changed_ids),
+            "changed_formula_ids": sorted(changed_ids),
+            "changes": changes,
+        },
+        "contracts": {
+            "all_strokes_exactly_once": True,
+            "target_label_or_glyph_count_input": False,
+            "candidate_preserving": True,
+            "arithmetic_evaluation": False,
+            "product_default_enabled": False,
+        },
+        "inputs": {
+            "partition_ranker_sha256": _sha256(args.partition_ranker.resolve()),
+            "hwr_checkpoint_sha256": _sha256(args.hwr_checkpoint.resolve()),
+            "context_checkpoint_sha256": _sha256(args.context_checkpoint.resolve()),
+            "candidate_context_fusion_config_sha256": _sha256(
+                args.candidate_context_fusion_config.resolve()
+            ),
+            "latin_auxiliary_checkpoint_sha256": _sha256(
+                args.latin_auxiliary_checkpoint.resolve()
+            ),
+        },
+        "limits": [
+            "CROHME is noncommercial repeated diagnostic evidence, not product validation",
+            "formulas containing unsupported labels or single-point source strokes are excluded",
+            "fresh commercial writer/formula-disjoint acceptance remains required",
+        ],
+    }
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8", newline="\n",
+    )
+    print(json.dumps({
+        "output": str(output), "sha256": _sha256(output),
+        "coverage": report["coverage"], "scores": report["scores"],
+        "repeat_merge_changed": len(repeat_changed_ids),
+        "single_glyph_equality_changed": len(single_equality_changed_ids),
+        "latin_t_context_changed": len(latin_t_changed_ids),
+    }, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

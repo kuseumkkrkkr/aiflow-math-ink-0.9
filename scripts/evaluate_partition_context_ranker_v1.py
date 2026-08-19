@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from datetime import datetime, timezone
 import json
 import math
@@ -41,9 +42,14 @@ from straight_equality_slot_rescue_v1 import (
     CONFIG_SCHEMA as EQUALITY_CONFIG_SCHEMA, SCHEMA as EQUALITY_SCHEMA,
     apply_straight_equality_slot_rescue,
 )
+from latin_t_context_rescue_v1 import (
+    DEFAULT_CONFIGURATION as PRODUCT_LATIN_T_CONFIGURATION,
+    apply_latin_t_context_rescue, build_latin_auxiliary_rows,
+    load_latin_auxiliary_model,
+)
 from stroke_grouping_v1 import (
     FEATURE_NAMES as GROUPING_FEATURE_NAMES, enumerate_partitions,
-    group_shape_features,
+    group_shape_features, normalized_group_dtw_distance,
 )
 from train_context_decision_layer_v1 import ROLE_TO_INDEX, _semantic_role
 from train_owned_formula_context_v1 import (
@@ -115,6 +121,18 @@ CROSS_MERGE_CONFIGURATION = {
     "maximum_absolute_aspect_log": 0.40,
     "required_merged_strokes": 2,
     "preserve_merged_x_after_auxiliary_fusion": True,
+}
+REPEAT_MERGE_CONFIGURATION = {
+    "maximum_candidate_rank": 3,
+    "minimum_geometry_delta": -6.0,
+    "minimum_ranker_probability": 0.80,
+    "maximum_pair_gap_ref": 0.20,
+    "minimum_y_overlap": 0.95,
+    "maximum_normalized_dtw_distance": 0.10,
+    "required_merged_strokes": 2,
+    "required_formula_glyphs": 3,
+    "relation_token": "=",
+    "preserve_merged_token_after_auxiliary_fusion": True,
 }
 NEGATED_RELATIONS = frozenset({
     r"\neq", r"\notin", r"\nsubset", r"\nsubseteq",
@@ -209,6 +227,57 @@ def _validate_cross_merge_configuration(configuration: dict) -> dict:
         **values,
         "required_merged_strokes": required_strokes,
         "preserve_merged_x_after_auxiliary_fusion": preserve_token,
+    }
+
+
+def _validate_repeat_merge_configuration(configuration: dict) -> dict:
+    expected = {
+        "maximum_candidate_rank", "minimum_geometry_delta",
+        "minimum_ranker_probability", "maximum_pair_gap_ref",
+        "minimum_y_overlap", "maximum_normalized_dtw_distance",
+        "required_merged_strokes", "required_formula_glyphs",
+        "relation_token", "preserve_merged_token_after_auxiliary_fusion",
+    }
+    if set(configuration) != expected:
+        raise ValueError("repeat merge configuration fields mismatch")
+    maximum_rank = configuration["maximum_candidate_rank"]
+    required_strokes = configuration["required_merged_strokes"]
+    required_glyphs = configuration["required_formula_glyphs"]
+    if (
+        isinstance(maximum_rank, bool) or not isinstance(maximum_rank, int)
+        or not 1 <= maximum_rank <= TOP_N
+        or isinstance(required_strokes, bool) or required_strokes != 2
+        or isinstance(required_glyphs, bool) or required_glyphs != 3
+        or configuration["relation_token"] != "="
+        or type(configuration["preserve_merged_token_after_auxiliary_fusion"])
+        is not bool
+    ):
+        raise ValueError("invalid repeat merge discrete configuration")
+    values = {
+        key: float(configuration[key]) for key in (
+            "minimum_geometry_delta", "minimum_ranker_probability",
+            "maximum_pair_gap_ref", "minimum_y_overlap",
+            "maximum_normalized_dtw_distance",
+        )
+    }
+    if (
+        not all(math.isfinite(value) for value in values.values())
+        or values["minimum_geometry_delta"] > 0.0
+        or not 0.0 <= values["minimum_ranker_probability"] <= 1.0
+        or values["maximum_pair_gap_ref"] < 0.0
+        or not 0.0 <= values["minimum_y_overlap"] <= 1.0
+        or values["maximum_normalized_dtw_distance"] < 0.0
+    ):
+        raise ValueError("invalid repeat merge threshold configuration")
+    return {
+        "maximum_candidate_rank": maximum_rank,
+        **values,
+        "required_merged_strokes": required_strokes,
+        "required_formula_glyphs": required_glyphs,
+        "relation_token": "=",
+        "preserve_merged_token_after_auxiliary_fusion": bool(
+            configuration["preserve_merged_token_after_auxiliary_fusion"]
+        ),
     }
 
 
@@ -666,16 +735,160 @@ def _cross_merge_selection(
     }
 
 
+def _repeat_merge_selection(
+    partitions: list[dict], selected: dict[str, dict], configuration: dict,
+) -> tuple[dict[str, dict], dict]:
+    configuration = _validate_repeat_merge_configuration(configuration)
+    grouped: dict[str, list[dict]] = {}
+    for partition in partitions:
+        grouped.setdefault(partition["sample"].sample_id, []).append(partition)
+    output = dict(selected)
+    changes = []
+    ambiguous = []
+    value_roles = {"digit", "operand"}
+    for sample_id, baseline in selected.items():
+        baseline_groups = [frozenset(group) for group in baseline["groups"]]
+        admitted = []
+        for candidate in grouped[sample_id]:
+            candidate_groups = [frozenset(group) for group in candidate["groups"]]
+            hwr_tokens = [str(row["final_topk"][0]) for row in candidate["rows"]]
+            context_tokens = [str(token) for token in candidate["tokens"]]
+            if (
+                candidate["rank"] > configuration["maximum_candidate_rank"]
+                or float(candidate["geometry_delta"])
+                < configuration["minimum_geometry_delta"]
+                or float(candidate.get("ranker_probability", 0.0))
+                < configuration["minimum_ranker_probability"]
+                or len(candidate_groups) != len(baseline_groups) - 1
+                or len(context_tokens) != configuration["required_formula_glyphs"]
+                or hwr_tokens != context_tokens
+                or context_tokens[1] != configuration["relation_token"]
+                or _semantic_role(context_tokens[0]) not in value_roles
+                or _semantic_role(context_tokens[2]) not in value_roles
+            ):
+                continue
+            components = {
+                merged: [group for group in baseline_groups if group.issubset(merged)]
+                for merged in candidate_groups
+            }
+            merged_groups = [
+                (merged, groups) for merged, groups in components.items()
+                if len(groups) > 1
+            ]
+            if (
+                len(merged_groups) != 1
+                or len(merged_groups[0][1]) != 2
+                or any(not groups for groups in components.values())
+            ):
+                continue
+            merged, pair = merged_groups[0]
+            if (
+                len(merged) != configuration["required_merged_strokes"]
+                or any(len(group) != 1 for group in pair)
+            ):
+                continue
+            merged_index = next(
+                index for index, row in enumerate(candidate["rows"])
+                if frozenset(row["group"]) == merged
+            )
+            if merged_index == 1:
+                continue
+            merged_row = candidate["rows"][merged_index]
+            features = merged_row["grouping_features"]
+            if (
+                float(features["temporal_contiguous"]) != 1.0
+                or float(features["pair_gap_max_ref"])
+                > configuration["maximum_pair_gap_ref"]
+                or float(features["y_overlap_mean"])
+                < configuration["minimum_y_overlap"]
+            ):
+                continue
+            token = context_tokens[merged_index]
+            references = [
+                frozenset(row["group"])
+                for index, row in enumerate(candidate["rows"])
+                if index != merged_index
+                and context_tokens[index] == token
+                and len(row["group"]) == configuration["required_merged_strokes"]
+            ]
+            if not references:
+                continue
+            distances = [
+                (
+                    normalized_group_dtw_distance(
+                        candidate["sample"].strokes, sorted(merged), sorted(reference),
+                    ),
+                    reference,
+                )
+                for reference in references
+            ]
+            distance, reference = min(distances, key=lambda value: value[0])
+            if distance > configuration["maximum_normalized_dtw_distance"]:
+                continue
+            admitted.append((candidate, merged, pair, reference, features, token, distance))
+        if len(admitted) != 1:
+            if len(admitted) > 1:
+                ambiguous.append(sample_id)
+            continue
+        candidate, merged, pair, reference, features, token, distance = admitted[0]
+        merged_row = next(
+            row for row in candidate["rows"] if frozenset(row["group"]) == merged
+        )
+        candidate = {
+            **candidate,
+            "repeat_merge_token_locks": (
+                {str(merged_row["record_id"]): token}
+                if configuration["preserve_merged_token_after_auxiliary_fusion"]
+                else {}
+            ),
+        }
+        output[sample_id] = candidate
+        changes.append({
+            "formula_id": sample_id,
+            "before_rank": int(baseline["rank"]),
+            "after_rank": int(candidate["rank"]),
+            "before_tokens": list(baseline["tokens"]),
+            "after_tokens": list(candidate["tokens"]),
+            "merged_component_groups": [sorted(group) for group in pair],
+            "merged_group": sorted(merged),
+            "reference_group": sorted(reference),
+            "repeated_token": token,
+            "normalized_dtw_distance": distance,
+            "geometry_delta": float(candidate["geometry_delta"]),
+            "ranker_probability": float(candidate["ranker_probability"]),
+            "pair_gap_max_ref": float(features["pair_gap_max_ref"]),
+            "y_overlap_mean": float(features["y_overlap_mean"]),
+        })
+    return output, {
+        "enabled": True,
+        "status": "development_only_posthoc_shadow",
+        "configuration": configuration,
+        "changed_formulas": len(changes),
+        "changes": changes,
+        "ambiguous_formulas": ambiguous,
+        "same_formula_repeated_shape_only": True,
+        "all_strokes_exactly_once": True,
+        "target_label_or_glyph_count_input": False,
+        "arithmetic_evaluation": False,
+    }
+
+
 def _apply_cross_merge_token_locks(
     rows: list[dict], selected: dict[str, dict],
 ) -> tuple[list[dict], dict]:
-    locks = {
-        str(record_id): str(token)
-        for partition in selected.values()
-        for record_id, token in dict(
-            partition.get("cross_merge_token_locks") or {}
-        ).items()
-    }
+    locks = {}
+    lock_rules = {}
+    for partition in selected.values():
+        for field, rule in (
+            ("cross_merge_token_locks", "cross_merge"),
+            ("repeat_merge_token_locks", "repeat_merge"),
+        ):
+            for record_id, token in dict(partition.get(field) or {}).items():
+                record_id = str(record_id); token = str(token)
+                if record_id in locks and locks[record_id] != token:
+                    raise AssertionError("grouping merge token lock conflict")
+                locks[record_id] = token
+                lock_rules[record_id] = rule
     changes = []
     output = []
     seen = set()
@@ -707,7 +920,7 @@ def _apply_cross_merge_token_locks(
             "finalized_top1": token,
             "changed": token != str(row.get("hwr_top1", candidates[0])),
             "decision_source": (
-                "cross_merge_auxiliary_semantic_lock_v1"
+                f"{lock_rules[record_id]}_auxiliary_semantic_lock_v1"
                 if changed else row.get("decision_source")
             ),
         })
@@ -724,6 +937,7 @@ def _apply_cross_merge_token_locks(
         "enabled": bool(locks),
         "status": "development_only_posthoc_shadow",
         "locked_records": len(locks),
+        "lock_rules": dict(sorted(Counter(lock_rules.values()).items())),
         "changed_glyphs": len(changes),
         "changes": changes,
         "candidate_preservation_rate": 1.0,
@@ -836,6 +1050,10 @@ def _auxiliary_rows(
                 "geometry": {
                     **source["geometry"],
                     **group_shape_features(sample.strokes, sorted(group)),
+                    "component_shapes": [
+                        group_shape_features(sample.strokes, [index])
+                        for index in sorted(group)
+                    ],
                 },
                 "context": dict(source["context"]),
                 "hwr_policy": policy,
@@ -849,6 +1067,7 @@ def _score_finalized(
     samples: list[Sample], selected: dict[str, dict], truth_labels: dict[str, list[str]],
     finalizer: OwnedFormulaContextFinalizer, auxiliary: dict | None = None,
     singleton_auxiliary: dict | None = None,
+    latin_auxiliary: dict | None = None,
 ) -> dict:
     runtime_rows = []
     for sample in samples:
@@ -1066,6 +1285,17 @@ def _score_finalized(
             final_rows, auxiliary_rows, auxiliary["equality_configuration"],
         )
         equality_score = score(final_rows, auxiliary_rows)
+    latin_audit = {"enabled": False}
+    latin_score = None
+    latin_rows = None
+    if latin_auxiliary is not None:
+        latin_rows = build_latin_auxiliary_rows(
+            samples, selected, latin_auxiliary["model"],
+            latin_auxiliary["labels"], latin_auxiliary["device"],
+        )
+        final_rows, latin_audit = apply_latin_t_context_rescue(
+            final_rows, latin_rows, latin_auxiliary["configuration"],
+        )
     lock_rows, cross_lock_audit = _apply_cross_merge_token_locks(
         final_rows, selected,
     )
@@ -1077,8 +1307,27 @@ def _score_finalized(
         lock_candidates = union_candidates
     else:
         lock_candidates = runtime_rows
+    if latin_rows is not None:
+        main_candidates = {
+            str(row["record_id"]): [str(value) for value in row["final_topk"]]
+            for row in lock_candidates
+        }
+        latin_candidates = {
+            str(row["record_id"]): [str(value) for value in row["final_topk"]]
+            for row in latin_rows
+        }
+        lock_candidates = []
+        for record_id, tokens in main_candidates.items():
+            combined = list(tokens)
+            combined.extend(
+                token for token in latin_candidates[record_id]
+                if token not in combined
+            )
+            lock_candidates.append({"record_id": record_id, "final_topk": combined})
     final_rows = lock_rows
     final_score = score(final_rows, lock_candidates)
+    if latin_rows is not None:
+        latin_score = final_score
     total = len(samples)
     result = {
         "formula_exact_count": base["exact"],
@@ -1105,6 +1354,7 @@ def _score_finalized(
             "wide_numeric_syntax_rescue": wide_audit,
             "formula_placement": placement_audit,
             "straight_equality": equality_audit,
+            "latin_t_context_rescue": latin_audit,
             "cross_merge_auxiliary_semantic_lock": cross_lock_audit,
         },
     }
@@ -1156,6 +1406,11 @@ def _score_finalized(
             "formula_placement_exact": placement_score["exact"] / total,
             "straight_equality_exact_count": equality_score["exact"],
             "straight_equality_exact": equality_score["exact"] / total,
+        })
+    if latin_score is not None:
+        result.update({
+            "latin_t_context_exact_count": latin_score["exact"],
+            "latin_t_context_exact": latin_score["exact"] / total,
         })
     return result
 
@@ -1242,6 +1497,7 @@ def main() -> int:
     parser.add_argument("--auxiliary-fusion-weight", type=float, default=0.6)
     parser.add_argument("--formula-placement-config", type=Path)
     parser.add_argument("--straight-equality-config", type=Path)
+    parser.add_argument("--latin-auxiliary-checkpoint", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     args = parser.parse_args()
@@ -1313,6 +1569,27 @@ def main() -> int:
     auxiliary_contract = {"enabled": False}
     singleton_auxiliary = None
     singleton_contract = {"enabled": False}
+    latin_auxiliary = None
+    latin_contract = {"enabled": False}
+    latin_path = None
+    if args.latin_auxiliary_checkpoint is not None:
+        latin_path = args.latin_auxiliary_checkpoint.resolve()
+        if not latin_path.is_file():
+            parser.error("Latin auxiliary checkpoint is missing")
+        latin_model, latin_labels = load_latin_auxiliary_model(latin_path, device)
+        latin_auxiliary = {
+            "model": latin_model,
+            "labels": latin_labels,
+            "device": device,
+            "configuration": dict(PRODUCT_LATIN_T_CONFIGURATION),
+        }
+        latin_contract = {
+            "enabled": True,
+            "checkpoint_sha256": _sha256(latin_path),
+            "candidate_width": 5,
+            "target_token": "t",
+            "product_default_enabled": False,
+        }
     if args.candidate_context_auxiliary_hwr_checkpoint is not None:
         singleton_hwr_path = args.candidate_context_auxiliary_hwr_checkpoint.resolve()
         singleton_hwr, singleton_labels, _ = _load_model(singleton_hwr_path, device)
@@ -1450,6 +1727,12 @@ def main() -> int:
     cross_merge_guard, cross_merge_audit = _cross_merge_selection(
         test_partitions, relation_merge_guard, cross_merge_configuration,
     )
+    repeat_merge_configuration = _validate_repeat_merge_configuration(
+        REPEAT_MERGE_CONFIGURATION,
+    )
+    repeat_merge_guard, repeat_merge_audit = _repeat_merge_selection(
+        test_partitions, cross_merge_guard, repeat_merge_configuration,
+    )
     scores = {
         "geometry_top1": _score(test, geometry_selected, truth_labels),
         "geometry_hwr_ranker": _score(test, hwr_selected, truth_labels),
@@ -1465,36 +1748,43 @@ def main() -> int:
         "cross_merge_guard": _score(
             test, cross_merge_guard, truth_labels,
         ),
+        "repeat_merge_guard": _score(
+            test, repeat_merge_guard, truth_labels,
+        ),
     }
     finalized_scores = {
         "geometry_top1": _score_finalized(
             test, geometry_selected, truth_labels, finalizer, auxiliary,
-            singleton_auxiliary,
+            singleton_auxiliary, latin_auxiliary,
         ),
         "posthoc_design_guard": _score_finalized(
             test, context_design_guard, truth_labels, finalizer, auxiliary,
-            singleton_auxiliary,
+            singleton_auxiliary, latin_auxiliary,
         ),
         "relation_merge_guard": _score_finalized(
             test, relation_merge_guard, truth_labels, finalizer, auxiliary,
-            singleton_auxiliary,
+            singleton_auxiliary, latin_auxiliary,
         ),
         "cross_merge_guard": _score_finalized(
             test, cross_merge_guard, truth_labels, finalizer, auxiliary,
-            singleton_auxiliary,
+            singleton_auxiliary, latin_auxiliary,
+        ),
+        "repeat_merge_guard": _score_finalized(
+            test, repeat_merge_guard, truth_labels, finalizer, auxiliary,
+            singleton_auxiliary, latin_auxiliary,
         ),
     }
     baseline = scores["geometry_top1"]
-    candidate = scores["cross_merge_guard"]
+    candidate = scores["repeat_merge_guard"]
     baseline_ids = {sample.sample_id for sample in test if geometry_selected[sample.sample_id]["truth"]}
-    candidate_ids = {sample.sample_id for sample in test if cross_merge_guard[sample.sample_id]["truth"]}
+    candidate_ids = {sample.sample_id for sample in test if repeat_merge_guard[sample.sample_id]["truth"]}
     comparison = {
         "grouping_improved": sorted(candidate_ids - baseline_ids),
         "grouping_regressed": sorted(baseline_ids - candidate_ids),
         "grouping_exact_delta": candidate["grouping_exact_count"] - baseline["grouping_exact_count"],
         "context_formula_exact_delta": candidate["context_formula_exact_count"] - baseline["context_formula_exact_count"],
         "finalized_formula_exact_delta": (
-            finalized_scores["cross_merge_guard"]["final_formula_exact_count"]
+            finalized_scores["repeat_merge_guard"]["final_formula_exact_count"]
             - finalized_scores["geometry_top1"]["final_formula_exact_count"]
         ),
     }
@@ -1508,6 +1798,7 @@ def main() -> int:
         "selection_guard": POSTHOC_DESIGN_GUARD,
         "relation_merge_guard": relation_merge_configuration,
         "cross_merge_guard": cross_merge_configuration,
+        "repeat_merge_guard": repeat_merge_configuration,
         "finalizer_contract": {
             "formula_layout": True,
             "semantic_guards": True,
@@ -1516,6 +1807,7 @@ def main() -> int:
             "formula_syntax_rescue_config_sha256": _sha256(syntax_path) if syntax_path else None,
             "auxiliary_candidates": auxiliary_contract,
             "singleton_shape_rescue": singleton_contract,
+            "latin_auxiliary_candidates": latin_contract,
         },
         "grouping_training_scope": "first 47 accepted ownership formulas",
         "ranker_training_scope": "first 47 writer-LOO grouping candidate partitions",
@@ -1536,6 +1828,7 @@ def main() -> int:
             "candidate_policy": candidate_policy,
             "auxiliary_candidates": auxiliary_contract,
             "singleton_shape_rescue": singleton_contract,
+            "latin_auxiliary_candidates": latin_contract,
         },
         "training": {
             "hwr_ranker": hwr_training, "context_ranker": context_training,
@@ -1546,6 +1839,7 @@ def main() -> int:
             },
             "relation_merge_guard": relation_merge_audit,
             "cross_merge_guard": cross_merge_audit,
+            "repeat_merge_guard": repeat_merge_audit,
         },
         "scores": scores, "finalized_scores": finalized_scores, "comparison": comparison,
         "selection_changes": {
@@ -1559,6 +1853,9 @@ def main() -> int:
             ),
             "cross_merge_guard": _selection_changes(
                 relation_merge_guard, cross_merge_guard,
+            ),
+            "repeat_merge_guard": _selection_changes(
+                cross_merge_guard, repeat_merge_guard,
             ),
         },
         "artifact": {"file": model_path.name, "sha256": _sha256(model_path), "feature_names": list(FEATURE_NAMES)},
@@ -1607,6 +1904,10 @@ def main() -> int:
                     str(singleton_hwr_path)
                     if singleton_auxiliary is not None else None
                 ),
+            },
+            "latin_auxiliary_candidates": {
+                **latin_contract,
+                "checkpoint": str(latin_path) if latin_path is not None else None,
             },
         },
         "requires_explicit_shadow_opt_in": True,

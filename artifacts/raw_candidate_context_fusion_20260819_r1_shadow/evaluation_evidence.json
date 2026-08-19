@@ -1,6 +1,6 @@
 {
   "schema": "aiflow-raw-candidate-context-fusion-evaluation/v1",
-  "generated_at": "2026-08-19T17:13:00Z",
+  "generated_at": "2026-08-19T18:40:12Z",
   "status": "development_only_posthoc_shadow",
   "protocol": {
     "dataset_formulas": 96,
@@ -17,7 +17,8 @@
     "auxiliary_hwr_checkpoint_sha256": "04f8608aebcf6c02d45ad6f5735229b9eaa2c4b4e1be0db4793d02273ef2d00e",
     "context_checkpoint_sha256": "7e0ff1b04ba1071867bfa6811869f242907ebe017d0996597776c6050cc2fc94",
     "formula_placement_config_sha256": "3b292678468d8ee8622b6420612d20a0478d7419aefbb2d633d0ad7c8150659b",
-    "straight_equality_config_sha256": "4711023cbb4679eb9864950ffa2b6d7fccb49dc0384a1b7cf74f00e2eb4b8ffa"
+    "straight_equality_config_sha256": "617bbd53e024a5b2d50166ff942990e46e44eac2e7229aa44536636398745b4f",
+    "latin_auxiliary_checkpoint_sha256": "3fab3ab0982ec19360e593d01552cbfe466523aebc6f68cd60cd8e33590fe4c7"
   },
   "posthoc_design_guard": {
     "grouping_exact": {"count": 48, "total": 49},
@@ -65,15 +66,33 @@
     "auxiliary_semantic_lock_changes": 0,
     "regressed_formulas": []
   },
+  "repeat_merge_guard": {
+    "configuration": {
+      "maximum_candidate_rank": 3,
+      "minimum_geometry_delta": -6.0,
+      "minimum_ranker_probability": 0.8,
+      "maximum_pair_gap_ref": 0.2,
+      "minimum_y_overlap": 0.95,
+      "maximum_normalized_dtw_distance": 0.1,
+      "required_merged_strokes": 2,
+      "required_formula_glyphs": 3
+    },
+    "grouping_exact": {"count": 49, "total": 49},
+    "changed_formulas": [],
+    "regressed_formulas": []
+  },
   "formula_placement_composition": {
     "product_fused_top20_formula_oracle": {"count": 48, "total": 49},
     "formula_placement_formula_exact": {"count": 45, "total": 49, "rate": 0.9183673469387755},
     "straight_equality_formula_exact": {"count": 46, "total": 49, "rate": 0.9387755102040817},
+    "latin_t_context_formula_exact": {"count": 47, "total": 49, "rate": 0.9591836734693877},
     "formula_placement_changes": 2,
     "formula_role_typo_changed_glyphs": 2,
     "formula_role_typo_improved_formulas": ["aiflow_0004", "aiflow_0061"],
     "straight_equality_changes": 1,
     "straight_equality_improved_formulas": ["aiflow_0056"],
+    "latin_t_context_changes": 1,
+    "latin_t_context_improved_formulas": ["aiflow_0064"],
     "pipeline_input": "wide_numeric_syntax_output",
     "regressed_formulas": []
   },
@@ -89,11 +108,13 @@
     "formula_role_typo_improved": ["aiflow_0004", "aiflow_0061"],
     "formula_role_typo_regressed": [],
     "straight_equality_improved": ["aiflow_0056"],
-    "straight_equality_regressed": []
+    "straight_equality_regressed": [],
+    "latin_t_context_improved": ["aiflow_0064"],
+    "latin_t_context_regressed": []
   },
   "remaining": {
     "grouping_failure": [],
-    "truth_outside_product_fused_top20_union": ["aiflow_0064"],
+    "truth_outside_product_fused_top20_union": [],
     "unresolved_inside_product_fused_top20_union": ["aiflow_0046", "aiflow_0072"]
   },
   "contracts": {
@@ -106,12 +127,17 @@
     "cross_merge_required_merged_strokes": 2,
     "cross_merge_merged_hwr_and_context_token": "x",
     "cross_merge_auxiliary_semantic_lock_candidate_preserving": true,
+    "repeat_merge_exact_cover_coarsening_only": true,
+    "repeat_merge_same_formula_shape_dtw_required": true,
+    "repeat_merge_hwr_context_agreement_required": true,
     "formula_placement_candidate_contract": "product_fused_top20",
     "formula_role_typo_geometry_and_role_gated": true,
     "formula_role_typo_target_input_disabled": true,
     "formula_role_typo_changed_glyphs": 2,
     "formula_placement_inserted_or_deleted_glyphs": 0,
     "straight_equality_maximum_changes_per_formula": 1,
+    "latin_t_context_candidate_contract": "approved_legacy_latin_auxiliary_top5",
+    "latin_t_context_target_input_disabled": true,
     "restricted_context_original_top5_candidate_set_preserved": true,
     "dual_numeric_candidate_contract": "baseline_and_auxiliary_top5_union",
     "dual_numeric_maximum_operand_to_digit_changes": 2,
@@ -143,9 +169,24 @@
     "glyph_regressed": 0,
     "product_validation": false
   },
+  "new_guards_raw_crohme_diagnostic": {
+    "path": "formula_context_crohme_raw_diagnostic_r2.json",
+    "sha256": "7a7af2d9c2dfa02a46e0435fbc879d30f9a437ecc2d60f9af2485835299f67cf",
+    "protocol_formulas": 985,
+    "eligible_formulas": 722,
+    "grouping_exact_before": 331,
+    "grouping_exact_after": 331,
+    "formula_exact_before": 77,
+    "formula_exact_after": 77,
+    "repeat_merge_changed": 0,
+    "single_glyph_equality_changed": 0,
+    "latin_t_context_changed": 0,
+    "regressed_formulas": 0,
+    "product_validation": false
+  },
   "full_local_probe": {
-    "path": "artifacts/partition_context_ranker_20260820_r33_role_typo_crohme_guarded/partition_context_ranker_summary.json",
-    "sha256": "58b64880775040bc1379ce853288fdebf490813f72c68bf30b1ad1d789a6d33b",
+    "path": "artifacts/partition_context_ranker_20260820_r36_latin_t_guarded/partition_context_ranker_summary.json",
+    "sha256": "a34d196aee0a9ca42103c8793ad059ac5bfcb4d94efb574a73e0f041070442e9",
     "selected_artifact": false
   }
 }

@@ -35,6 +35,20 @@ DEFAULT_CONFIGURATION = {
     "minimum_formula_length": 3,
     "maximum_formula_length": 64,
     "maximum_changes_per_formula": 1,
+    "single_glyph_component_pair": {
+        "enabled": True,
+        "maximum_candidate_rank": 3,
+        "minimum_candidate_probability": 0.05,
+        "minimum_component_aspect_log": 1.5,
+        "maximum_component_path_over_diagonal": 1.35,
+        "minimum_component_absolute_direction_x": 0.75,
+        "maximum_component_absolute_direction_y": 0.10,
+        "minimum_component_width_ratio": 0.75,
+        "minimum_x_overlap": 0.90,
+        "minimum_vertical_gap_width_ratio": 0.05,
+        "maximum_vertical_gap_width_ratio": 0.60,
+        "maximum_center_x_offset_width_ratio": 0.10,
+    },
 }
 
 
@@ -65,6 +79,9 @@ def validate_configuration(configuration: dict) -> dict:
         "maximum_formula_length": int(configuration["maximum_formula_length"]),
         "maximum_changes_per_formula": int(
             configuration["maximum_changes_per_formula"]
+        ),
+        "single_glyph_component_pair": dict(
+            configuration["single_glyph_component_pair"]
         ),
     }
     numeric = (
@@ -99,6 +116,33 @@ def validate_configuration(configuration: dict) -> dict:
     policies = output["allowed_auxiliary_policies"]
     if not policies or len(policies) != len(set(policies)) or any(not value for value in policies):
         raise ValueError("straight-equality candidate policies are invalid")
+    single = output["single_glyph_component_pair"]
+    expected_single = set(DEFAULT_CONFIGURATION["single_glyph_component_pair"])
+    if set(single) != expected_single or type(single["enabled"]) is not bool:
+        raise ValueError("straight-equality single-glyph fields mismatch")
+    single["maximum_candidate_rank"] = int(single["maximum_candidate_rank"])
+    for key in expected_single - {"enabled", "maximum_candidate_rank"}:
+        single[key] = float(single[key])
+    if (
+        not 1 <= single["maximum_candidate_rank"] <= output["candidate_width"]
+        or not all(
+            math.isfinite(value)
+            for key, value in single.items()
+            if key not in {"enabled", "maximum_candidate_rank"}
+        )
+        or not 0.0 <= single["minimum_candidate_probability"] <= 1.0
+        or single["minimum_component_aspect_log"] < 0.0
+        or single["maximum_component_path_over_diagonal"] < 1.0
+        or not 0.0 <= single["minimum_component_absolute_direction_x"] <= 1.0
+        or not 0.0 <= single["maximum_component_absolute_direction_y"] <= 1.0
+        or not 0.0 <= single["minimum_component_width_ratio"] <= 1.0
+        or not 0.0 <= single["minimum_x_overlap"] <= 1.0
+        or single["minimum_vertical_gap_width_ratio"] < 0.0
+        or single["maximum_vertical_gap_width_ratio"]
+        < single["minimum_vertical_gap_width_ratio"]
+        or single["maximum_center_x_offset_width_ratio"] < 0.0
+    ):
+        raise ValueError("straight-equality single-glyph thresholds are invalid")
     return output
 
 
@@ -174,6 +218,69 @@ def _eligible(candidate: dict, configuration: dict) -> tuple[bool, dict]:
     return passed, evidence
 
 
+def _single_glyph_eligible(candidate: dict, configuration: dict) -> tuple[bool, dict]:
+    single = configuration["single_glyph_component_pair"]
+    if not single["enabled"] or configuration["replacement"] not in candidate["tokens"]:
+        return False, {}
+    index = candidate["tokens"].index(configuration["replacement"])
+    geometry = candidate.get("geometry", {})
+    components = geometry.get("component_shapes")
+    if not isinstance(components, list) or len(components) != 2:
+        return False, {}
+    try:
+        shapes = [{key: float(value) for key, value in shape.items()} for shape in components]
+        widths = [shape["width"] for shape in shapes]
+        width_reference = max(sum(widths) / 2.0, 1e-8)
+        x_overlap = max(
+            0.0,
+            min(shapes[0]["right"], shapes[1]["right"])
+            - max(shapes[0]["left"], shapes[1]["left"]),
+        ) / max(min(widths), 1e-8)
+        vertical_gap = max(
+            shapes[0]["top"] - shapes[1]["bottom"],
+            shapes[1]["top"] - shapes[0]["bottom"],
+            0.0,
+        ) / width_reference
+        center_offset = abs(shapes[0]["cx"] - shapes[1]["cx"]) / width_reference
+        evidence = {
+            "candidate_rank": index + 1,
+            "candidate_probability": candidate["probabilities"][index],
+            "stroke_count": int(round(float(geometry["stroke_count"]))),
+            "component_aspect_log_min": min(shape["aspect_log"] for shape in shapes),
+            "component_path_over_diag_max": max(shape["path_over_diag"] for shape in shapes),
+            "component_absolute_direction_x_min": min(abs(shape["direction_x"]) for shape in shapes),
+            "component_absolute_direction_y_max": max(abs(shape["direction_y"]) for shape in shapes),
+            "component_width_ratio": min(widths) / max(max(widths), 1e-8),
+            "component_x_overlap": x_overlap,
+            "component_vertical_gap_width_ratio": vertical_gap,
+            "component_center_x_offset_width_ratio": center_offset,
+        }
+    except (KeyError, TypeError, ValueError):
+        return False, {}
+    passed = bool(
+        evidence["candidate_rank"] <= single["maximum_candidate_rank"]
+        and evidence["candidate_probability"] >= single["minimum_candidate_probability"]
+        and evidence["stroke_count"] == configuration["required_stroke_count"]
+        and evidence["component_aspect_log_min"]
+        >= single["minimum_component_aspect_log"]
+        and evidence["component_path_over_diag_max"]
+        <= single["maximum_component_path_over_diagonal"]
+        and evidence["component_absolute_direction_x_min"]
+        >= single["minimum_component_absolute_direction_x"]
+        and evidence["component_absolute_direction_y_max"]
+        <= single["maximum_component_absolute_direction_y"]
+        and evidence["component_width_ratio"]
+        >= single["minimum_component_width_ratio"]
+        and evidence["component_x_overlap"] >= single["minimum_x_overlap"]
+        and single["minimum_vertical_gap_width_ratio"]
+        <= evidence["component_vertical_gap_width_ratio"]
+        <= single["maximum_vertical_gap_width_ratio"]
+        and evidence["component_center_x_offset_width_ratio"]
+        <= single["maximum_center_x_offset_width_ratio"]
+    )
+    return passed, evidence
+
+
 def apply_straight_equality_slot_rescue(
     baseline_rows: list[dict], candidate_rows: list[dict],
     configuration: dict | None = None,
@@ -195,6 +302,30 @@ def apply_straight_equality_slot_rescue(
     formulae = _formulae(baseline_rows)
     for formula_id, sequence in formulae.items():
         before = [str(row["finalized_top1"]) for row in sequence]
+        if len(before) == 1:
+            if replacement in before:
+                skipped["existing_equality"] += 1
+                continue
+            row = sequence[0]
+            record_id = str(row["record_id"])
+            candidate = candidates[record_id]
+            if str(candidate.get("formula_id", "")) != formula_id:
+                raise ValueError(f"straight-equality formula identity mismatch: {record_id}")
+            passed, evidence = _single_glyph_eligible(candidate, configuration)
+            if not passed:
+                skipped["no_straight_single_glyph_pair"] += 1
+                continue
+            selected[record_id] = replacement
+            changes.append({
+                "formula_id": formula_id,
+                "record_id": record_id,
+                "context_index": 0,
+                "before": before[0],
+                "after": replacement,
+                **evidence,
+                "rule": "single_glyph_aligned_straight_component_pair",
+            })
+            continue
         if not configuration["minimum_formula_length"] <= len(before) <= configuration[
             "maximum_formula_length"
         ]:
@@ -308,6 +439,33 @@ def _self_test() -> None:
     output, audit = apply_straight_equality_slot_rescue(baseline, candidates)
     assert [row["finalized_top1"] for row in output] == ["7", r"\approx", "1"]
     assert audit["changed_glyphs"] == 0
+    single_baseline = [{
+        "record_id": "single", "formula_id": "single", "context_index": 0,
+        "finalized_top1": r"\Xi",
+    }]
+    single_candidates = [{
+        "record_id": "single", "formula_id": "single",
+        "final_topk": [r"\Xi", r"\asymp", "="] + [f"single_{i}" for i in range(17)],
+        "final_topk_probabilities": [0.7, 0.1, 0.05] + [0.0] * 17,
+        "hwr_policy": "old_new_product_probability_fusion",
+        "hwr_fusion_weight": 0.6,
+        "geometry": {
+            "stroke_count": 2.0,
+            "component_shapes": [
+                {"left": 0.0, "right": 1.0, "top": 0.0, "bottom": 0.05,
+                 "width": 1.0, "cx": 0.5, "aspect_log": 2.0,
+                 "path_over_diag": 1.1, "direction_x": 0.9, "direction_y": 0.02},
+                {"left": 0.02, "right": 0.98, "top": 0.4, "bottom": 0.45,
+                 "width": 0.96, "cx": 0.5, "aspect_log": 2.0,
+                 "path_over_diag": 1.2, "direction_x": 0.85, "direction_y": 0.03},
+            ],
+        },
+    }]
+    output, audit = apply_straight_equality_slot_rescue(
+        single_baseline, single_candidates,
+    )
+    assert output[0]["finalized_top1"] == "="
+    assert audit["changes"][0]["rule"] == "single_glyph_aligned_straight_component_pair"
 
 
 def main() -> int:

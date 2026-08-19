@@ -207,6 +207,72 @@ def group_shape_features(
     }
 
 
+def _normalized_group_paths(
+    strokes: Sequence[dict[str, Any]], indices: Sequence[int], *, points: int,
+) -> list[np.ndarray]:
+    ordered = sorted(strokes, key=lambda row: int(row.get("order", 0)))
+    arrays = [
+        np.asarray([_xy(point) for point in ordered[int(index)]["points"]], dtype=np.float64)
+        for index in indices
+    ]
+    if not arrays or points < 2:
+        raise ValueError("normalized group paths require strokes and at least two samples")
+    combined = np.concatenate(arrays, axis=0)
+    low = combined.min(axis=0); high = combined.max(axis=0)
+    center = (low + high) / 2.0
+    scale = max(float((high - low).max()), 1e-8)
+    output = []
+    for array in arrays:
+        normalized = (array - center) / scale
+        if len(normalized) == 1:
+            output.append(np.repeat(normalized, points, axis=0))
+            continue
+        distance = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(normalized, axis=0), axis=1))]
+        if float(distance[-1]) <= 1e-10:
+            output.append(np.repeat(normalized[:1], points, axis=0))
+            continue
+        target = np.linspace(0.0, float(distance[-1]), points)
+        output.append(np.column_stack([
+            np.interp(target, distance, normalized[:, axis]) for axis in range(2)
+        ]))
+    return output
+
+
+def normalized_group_dtw_distance(
+    strokes: Sequence[dict[str, Any]], first: Sequence[int], second: Sequence[int],
+    *, points_per_stroke: int = 32, band: int = 8,
+) -> float:
+    """Compare two same-stroke-count glyphs without using timing or labels."""
+    if len(first) != len(second) or not first:
+        return math.inf
+    if band < 0:
+        raise ValueError("DTW band must be non-negative")
+    left = _normalized_group_paths(strokes, first, points=points_per_stroke)
+    right = _normalized_group_paths(strokes, second, points=points_per_stroke)
+    distances = []
+    for left_path, right_path in zip(left, right, strict=True):
+        rows = len(left_path); columns = len(right_path)
+        cost = np.full((rows + 1, columns + 1), math.inf, dtype=np.float64)
+        steps = np.zeros((rows + 1, columns + 1), dtype=np.int32)
+        cost[0, 0] = 0.0
+        for row in range(1, rows + 1):
+            for column in range(max(1, row - band), min(columns, row + band) + 1):
+                choices = (
+                    (cost[row - 1, column], steps[row - 1, column]),
+                    (cost[row, column - 1], steps[row, column - 1]),
+                    (cost[row - 1, column - 1], steps[row - 1, column - 1]),
+                )
+                previous_cost, previous_steps = min(choices, key=lambda value: value[0])
+                cost[row, column] = previous_cost + float(
+                    np.linalg.norm(left_path[row - 1] - right_path[column - 1])
+                )
+                steps[row, column] = previous_steps + 1
+        if not math.isfinite(float(cost[rows, columns])):
+            return math.inf
+        distances.append(float(cost[rows, columns]) / max(int(steps[rows, columns]), 1))
+    return float(np.mean(distances))
+
+
 def select_partition(
     candidates: Sequence[dict[str, Any]], scores: Sequence[float], stroke_count: int,
     *, group_bias: float = 0.0, beam_width: int = 256, options_per_stroke: int = 64,
@@ -366,6 +432,8 @@ def _self_test() -> None:
     assert set(ranked[0][1]) == {frozenset({0, 1}), frozenset({2})}
     shape = group_shape_features(strokes, [0, 1])
     assert shape["stroke_count"] == 2.0 and shape["path_over_diag"] > 1.0
+    assert normalized_group_dtw_distance(strokes, [0, 1], [0, 1]) == 0.0
+    assert math.isinf(normalized_group_dtw_distance(strokes, [0], [0, 1]))
 
 
 if __name__ == "__main__":
