@@ -4,10 +4,11 @@
 The runtime never receives truth labels and never creates a token, deletes a
 glyph, or changes stroke ownership. Load ``OwnedFormulaContextFinalizer`` once
 per process, then call ``finalize`` for each candidate batch. The selected r6
-context model is followed by conservative semantic guards. An optional formula
-sequence layer repairs only invalid simple numeric syntax inside Top-5; it does
-not evaluate arithmetic. Arithmetic equation correction is research-only and
-must be enabled explicitly because HWR must preserve a user's wrong answer.
+context model is followed by conservative semantic guards. Optional formula
+sequence and syntax-rescue layers repair only admitted simple numeric syntax
+inside Top-5; neither evaluates arithmetic. Arithmetic equation correction is
+research-only and must be enabled explicitly because HWR must preserve a
+user's wrong answer.
 
 Research training keeps its D-drive storage boundary. This inference entrypoint
 accepts ordinary resolved paths so the same frozen checkpoints can run in a
@@ -33,6 +34,10 @@ from formula_script_network_v1 import NeuralScriptPredictor
 from formula_sequence_guard_v1 import (
     apply_formula_sequence_guard, validate_configuration,
 )
+from formula_syntax_rescue_v1 import (
+    apply_formula_syntax_rescue,
+    validate_configuration as validate_syntax_rescue_configuration,
+)
 from semantic_equation_guard_v2 import apply_semantic_equation_guard_v2
 from semantic_fence_guard_v1 import apply_semantic_fence_guard
 from semantic_infix_guard_v1 import apply_semantic_infix_guard
@@ -54,6 +59,7 @@ REQUIRED = {
     "geometry",
 }
 SEQUENCE_CONFIG_SCHEMA = "aiflow-formula-sequence-guard-runtime-config/v1"
+SYNTAX_RESCUE_CONFIG_SCHEMA = "aiflow-formula-syntax-rescue-runtime-config/v1"
 
 
 def _runtime_rows(
@@ -100,11 +106,13 @@ def _runtime_rows(
 def _decision_metadata(
     row: dict, hwr: str, context_token: str, equation_token: str,
     fence_token: str, first_final_token: str, pre_sequence_token: str,
-    final_token: str,
+    pre_syntax_token: str, final_token: str,
     supported_exact: bool = False,
 ) -> tuple[bool, str, str]:
     context_available = int(row["context"]["length"]) > 1
-    if final_token != pre_sequence_token:
+    if final_token != pre_syntax_token:
+        source = "formula_syntax_rescue_v1"
+    elif pre_syntax_token != pre_sequence_token:
         source = "formula_sequence_guard_v1"
     elif not context_available:
         source = "context_prior_only" if final_token != hwr else "hwr_top1_no_context"
@@ -153,6 +161,7 @@ class OwnedFormulaContextFinalizer:
         formula_layout: bool = False,
         script_layout_checkpoint: Path | None = None,
         formula_sequence_config: Path | None = None,
+        formula_syntax_rescue_config: Path | None = None,
     ) -> None:
         if batch_size < 1:
             raise ValueError("batch size must be positive")
@@ -162,6 +171,8 @@ class OwnedFormulaContextFinalizer:
             raise ValueError("script layout checkpoint requires formula layout")
         if formula_sequence_config is not None and not formula_layout:
             raise ValueError("formula sequence guard requires formula layout")
+        if formula_syntax_rescue_config is not None and not formula_layout:
+            raise ValueError("formula syntax rescue requires formula layout")
         resolved_device = (
             "cuda" if device == "auto" and torch.cuda.is_available()
             else ("cpu" if device == "auto" else device)
@@ -205,6 +216,24 @@ class OwnedFormulaContextFinalizer:
                 sequence_payload["configuration"]
             )
             self.sequence_guard_config_sha256 = _sha256(sequence_path)
+        self.syntax_rescue_configuration = None
+        self.syntax_rescue_config_sha256 = None
+        if formula_syntax_rescue_config is not None:
+            rescue_path = Path(formula_syntax_rescue_config).expanduser().resolve()
+            if not rescue_path.is_file():
+                raise FileNotFoundError(f"formula syntax rescue config is missing: {rescue_path}")
+            rescue_payload = json.loads(rescue_path.read_text(encoding="utf-8"))
+            if (
+                rescue_payload.get("schema") != SYNTAX_RESCUE_CONFIG_SCHEMA
+                or rescue_payload.get("checkpoint_sha256") != self.checkpoint_sha256
+                or rescue_payload.get("hwr_checkpoint_sha256") != self.hwr_checkpoint_sha256
+                or rescue_payload.get("gate", {}).get("runtime_admitted") is not True
+            ):
+                raise ValueError("formula syntax rescue config contract mismatch")
+            self.syntax_rescue_configuration = validate_syntax_rescue_configuration(
+                rescue_payload["configuration"]
+            )
+            self.syntax_rescue_config_sha256 = _sha256(rescue_path)
 
     def finalize(self, rows: list[dict]) -> tuple[list[dict], dict]:
         runtime_rows = _runtime_rows(
@@ -286,6 +315,7 @@ class OwnedFormulaContextFinalizer:
             first_predictions = predictions
             semantic_audit = {"enabled": False}
         pre_sequence_predictions = predictions
+        sequence_components = None
         if self.sequence_guard_configuration is not None:
             sequence_components = _components(
                 self.model, self.contract, runtime_rows,
@@ -302,6 +332,28 @@ class OwnedFormulaContextFinalizer:
                 "enabled": False,
                 "policy": "formula sequence correction requires an admitted config",
             }
+        pre_syntax_predictions = predictions
+        if self.syntax_rescue_configuration is not None:
+            syntax_components = (
+                sequence_components
+                if sequence_components is not None
+                and pre_syntax_predictions == pre_sequence_predictions
+                else _components(
+                    self.model, self.contract, runtime_rows,
+                    self.payload["role_grammar"], self.device, self.batch_size,
+                    pre_syntax_predictions,
+                )
+            )
+            predictions, syntax_rescue_audit = apply_formula_syntax_rescue(
+                runtime_rows, pre_syntax_predictions, syntax_components,
+                self.payload["role_grammar"], self.syntax_rescue_configuration,
+            )
+            syntax_rescue_audit["config_sha256"] = self.syntax_rescue_config_sha256
+        else:
+            syntax_rescue_audit = {
+                "enabled": False,
+                "policy": "valid numeric syntax rescue requires an admitted config",
+            }
         output = []
         for row in runtime_rows:
             record_id = str(row["record_id"])
@@ -316,16 +368,21 @@ class OwnedFormulaContextFinalizer:
                 str(fence_predictions[record_id]),
                 str(first_predictions[record_id]),
                 str(pre_sequence_predictions[record_id]),
+                str(pre_syntax_predictions[record_id]),
                 prediction,
                 record_id in supported_exact_records,
             )
             output.append({
                 "schema": (
-                    "aiflow-formula-context-finalized/v6"
-                    if self.sequence_guard_configuration is not None
+                    "aiflow-formula-context-finalized/v7"
+                    if self.syntax_rescue_configuration is not None
                     else (
-                        "aiflow-formula-context-finalized/v5"
-                        if self.formula_layout else "aiflow-formula-context-finalized/v4"
+                        "aiflow-formula-context-finalized/v6"
+                        if self.sequence_guard_configuration is not None
+                        else (
+                            "aiflow-formula-context-finalized/v5"
+                            if self.formula_layout else "aiflow-formula-context-finalized/v4"
+                        )
                     )
                 ),
                 "record_id": record_id,
@@ -363,6 +420,9 @@ class OwnedFormulaContextFinalizer:
             ) + (
                 ["formula_sequence_guard_v1"]
                 if self.sequence_guard_configuration is not None else []
+            ) + (
+                ["formula_syntax_rescue_v1"]
+                if self.syntax_rescue_configuration is not None else []
             ),
             "records": len(output),
             "formulas": len({row["formula_id"] for row in output}),
@@ -378,6 +438,7 @@ class OwnedFormulaContextFinalizer:
             "model": model_audit,
             "semantic_guards": semantic_audit,
             "formula_sequence_guard": sequence_audit,
+            "formula_syntax_rescue": syntax_rescue_audit,
         }
 
 
@@ -401,22 +462,25 @@ def _self_test() -> None:
     clean = _runtime_rows(rows, labels)
     assert "label" not in clean[0]
     assert clean[0]["final_topk"] == ["1", "+"]
-    assert _decision_metadata(clean[0], "1", "+", "+", "+", "+", "+", "+") == (
+    assert _decision_metadata(clean[0], "1", "+", "+", "+", "+", "+", "+", "+") == (
         False, "ambiguous_no_formula_context", "context_prior_only",
     )
     contextual = {**clean[0], "context": {"index": 1, "length": 3}}
-    assert _decision_metadata(contextual, "1", "1", "1", "1", "+", "+", "+") == (
+    assert _decision_metadata(contextual, "1", "1", "1", "1", "+", "+", "+", "+") == (
         True, "finalized", "semantic_infix_guard",
     )
     assert _decision_metadata(
-        contextual, "h", "b", "b", "b", "b", "b", "b", True
+        contextual, "h", "b", "b", "b", "b", "b", "b", "b", True
     ) == (True, "finalized", "owned_supported_exact_context_guard")
     assert _decision_metadata(
-        contextual, "x", r"\times", r"\times", r"\times", r"\times", "x", "x"
+        contextual, "x", r"\times", r"\times", r"\times", r"\times", "x", "x", "x"
     ) == (True, "finalized", "context_recheck_guard_v1")
     assert _decision_metadata(
-        contextual, "b", "b", "b", "b", "b", "b", "6"
+        contextual, "b", "b", "b", "b", "b", "b", "6", "6"
     ) == (True, "finalized", "formula_sequence_guard_v1")
+    assert _decision_metadata(
+        contextual, "4", "4", "4", "4", "4", "4", "4", "+"
+    ) == (True, "finalized", "formula_syntax_rescue_v1")
     equation_rows = [
         {
             "record_id": f"e{index}", "formula_id": "wrong-answer",
@@ -473,6 +537,10 @@ def main() -> int:
         help="shadow: admitted candidate-preserving numeric syntax correction",
     )
     parser.add_argument(
+        "--formula-syntax-rescue-config", type=Path,
+        help="shadow: restore one strongly implied structural token",
+    )
+    parser.add_argument(
         "--enable-equation-correction", action="store_true",
         help="research-only: allow exact arithmetic to override HWR candidates",
     )
@@ -484,6 +552,8 @@ def main() -> int:
         parser.error("--script-layout-checkpoint requires --enable-formula-layout")
     if args.formula_sequence_config and not args.enable_formula_layout:
         parser.error("--formula-sequence-config requires --enable-formula-layout")
+    if args.formula_syntax_rescue_config and not args.enable_formula_layout:
+        parser.error("--formula-syntax-rescue-config requires --enable-formula-layout")
     if args.self_test:
         _self_test()
         print(json.dumps({"self_test": "pass"}))
@@ -504,6 +574,7 @@ def main() -> int:
         formula_layout=args.enable_formula_layout,
         script_layout_checkpoint=args.script_layout_checkpoint,
         formula_sequence_config=args.formula_sequence_config,
+        formula_syntax_rescue_config=args.formula_syntax_rescue_config,
     )
     finalized, audit = finalizer.finalize(list(_json_lines(input_path)))
     output_path.parent.mkdir(parents=True, exist_ok=True)
