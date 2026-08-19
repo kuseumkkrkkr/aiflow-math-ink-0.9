@@ -20,6 +20,7 @@ from typing import Any
 
 
 CONFIG_SCHEMA = "aiflow-formula-acceptance-guard-config/v1"
+CONFIG_SCHEMA_V2 = "aiflow-formula-acceptance-guard-config/v2"
 GUARD_SCHEMA = "aiflow-formula-acceptance-guard/v1"
 DECISION_SCHEMA = "aiflow-formula-acceptance-decision/v1"
 AUTO_ACCEPTED = "AUTO_ACCEPTED"
@@ -42,17 +43,33 @@ def _sha256(path: Path) -> str:
 def validate_configuration(payload: dict[str, Any]) -> dict[str, Any]:
     policy = dict(payload.get("policy") or {})
     cross = dict(policy.get("two_stroke_cross_grouping_conflict") or {})
+    digit_conflict = dict(policy.get("context_digit_homograph_conflict") or {})
     contracts = dict(payload.get("contracts") or {})
     families = policy.get("unresolved_singleton_homograph_families")
     ratio = float(cross.get("minimum_ranker_probability_ratio", math.nan))
+    digit_ratio = float(
+        digit_conflict.get("minimum_alternate_digit_probability_ratio", math.nan)
+    )
     alternate_tokens = cross.get("alternate_tokens")
+    legacy_multidigit = (
+        payload.get("schema") == CONFIG_SCHEMA
+        and policy.get("review_context_mutated_multidigit") is True
+    )
+    refined_multidigit = (
+        payload.get("schema") == CONFIG_SCHEMA_V2
+        and policy.get("review_context_mutated_multidigit") is False
+        and digit_conflict.get("enabled") is True
+        and digit_conflict.get("require_adjacent_digit") is True
+        and math.isfinite(digit_ratio)
+        and 0.0 <= digit_ratio <= 1.0
+    )
     if (
-        payload.get("schema") != CONFIG_SCHEMA
+        payload.get("schema") not in {CONFIG_SCHEMA, CONFIG_SCHEMA_V2}
         or payload.get("guard_schema") != GUARD_SCHEMA
         or payload.get("status") != "development_only_posthoc_shadow"
         or payload.get("posthoc_test_tuning") is not True
         or policy.get("review_singleton_context_override") is not True
-        or policy.get("review_context_mutated_multidigit") is not True
+        or not (legacy_multidigit or refined_multidigit)
         or policy.get("review_unbalanced_multisymbol_fence") is not True
         or not isinstance(families, list)
         or not families
@@ -91,6 +108,13 @@ def validate_configuration(payload: dict[str, Any]) -> dict[str, Any]:
                 "alternate_tokens": alternate_tokens,
                 "minimum_ranker_probability_ratio": ratio,
             },
+            "context_digit_homograph_conflict": (
+                {
+                    **digit_conflict,
+                    "minimum_alternate_digit_probability_ratio": digit_ratio,
+                }
+                if refined_multidigit else {}
+            ),
         },
         "contracts": contracts,
     }
@@ -168,21 +192,52 @@ def review_reasons(
         and bool(symbols[0].get("changed"))
     ):
         reasons.add("singleton_context_override")
-    if policy["review_context_mutated_multidigit"] and any(
-        bool(symbol.get("changed"))
-        and token.isascii()
-        and token.isdigit()
-        and (
-            (index > 0 and tokens[index - 1].isascii() and tokens[index - 1].isdigit())
-            or (
-                index + 1 < len(tokens)
-                and tokens[index + 1].isascii()
-                and tokens[index + 1].isdigit()
+    mutated_multidigit_positions = [
+        index for index, (token, symbol) in enumerate(zip(tokens, symbols, strict=True))
+        if (
+            bool(symbol.get("changed"))
+            and token.isascii()
+            and token.isdigit()
+            and (
+                (index > 0 and tokens[index - 1].isascii() and tokens[index - 1].isdigit())
+                or (
+                    index + 1 < len(tokens)
+                    and tokens[index + 1].isascii()
+                    and tokens[index + 1].isdigit()
+                )
             )
         )
-        for index, (token, symbol) in enumerate(zip(tokens, symbols, strict=True))
-    ):
+    ]
+    if policy["review_context_mutated_multidigit"] and mutated_multidigit_positions:
         reasons.add("context_mutated_multidigit")
+    digit_conflict = policy.get("context_digit_homograph_conflict") or {}
+    for index in mutated_multidigit_positions if digit_conflict.get("enabled") else []:
+        symbol = symbols[index]
+        candidates = [str(value) for value in symbol.get("hwr_topk") or []]
+        probabilities = [float(value) for value in symbol.get("hwr_topk_probabilities") or []]
+        if (
+            not candidates
+            or len(candidates) != len(probabilities)
+            or len(candidates) != len(set(candidates))
+            or any(not math.isfinite(value) or value < 0.0 for value in probabilities)
+        ):
+            raise ValueError("digit homograph review requires valid HWR Top-k evidence")
+        token = tokens[index]
+        if token not in candidates:
+            continue
+        selected_probability = probabilities[candidates.index(token)]
+        if selected_probability <= 0.0:
+            continue
+        if any(
+            candidate != token
+            and candidate.isascii()
+            and candidate.isdigit()
+            and probability / selected_probability
+            >= digit_conflict["minimum_alternate_digit_probability_ratio"]
+            for candidate, probability in zip(candidates, probabilities, strict=True)
+        ):
+            reasons.add("context_digit_homograph_conflict")
+            break
     if (
         policy["review_unbalanced_multisymbol_fence"]
         and len(tokens) > 1
@@ -297,6 +352,21 @@ def _self_test() -> None:
         formula["symbols"][0], {"changed": False}, formula["symbols"][1],
     ]}
     assert assess_formula(clean, configuration)["decision_status"] == AUTO_ACCEPTED
+    refined = deepcopy(configuration)
+    refined["schema"] = CONFIG_SCHEMA_V2
+    refined["policy"]["review_context_mutated_multidigit"] = False
+    refined["policy"]["context_digit_homograph_conflict"] = {
+        "enabled": True,
+        "require_adjacent_digit": True,
+        "minimum_alternate_digit_probability_ratio": 0.5,
+    }
+    formula["symbols"][1].update({
+        "hwr_topk": [r"\diamond", "6", "0"],
+        "hwr_topk_probabilities": [0.45, 0.25, 0.13],
+    })
+    assert review_reasons(formula, refined) == ["context_digit_homograph_conflict"]
+    formula["symbols"][1]["hwr_topk_probabilities"][2] = 0.01
+    assert assess_formula(formula, refined)["decision_status"] == AUTO_ACCEPTED
 
 
 def main() -> int:

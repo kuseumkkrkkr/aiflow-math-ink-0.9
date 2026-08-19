@@ -946,8 +946,13 @@ class RawFormulaContextRuntimeV1:
                 "relation_from_previous": row.get("layout_relation_from_previous"),
                 "stroke_indices": list(group_by_record[str(row["record_id"])]["stroke_indices"]),
                 "hwr_top1": str(runtime_by_record[str(row["record_id"])]["final_topk"][0]),
+                "hwr_topk": list(runtime_by_record[str(row["record_id"])]["final_topk"]),
+                "hwr_topk_probabilities": list(
+                    runtime_by_record[str(row["record_id"])]["final_topk_probabilities"]
+                ),
                 "finalized_top1": str(row["finalized_top1"]),
                 "changed": bool(row["changed"]),
+                "context_decision_status": row.get("decision_status"),
                 "decision_source": row.get("decision_source"),
             }
             for row in finalized
