@@ -115,9 +115,10 @@ def _dual_straight_one(sequence: list[dict], candidates: dict[str, dict]) -> dic
     for index in (2, 4):
         row = sequence[index]
         candidate = candidates[str(row["record_id"])]
+        topk = [str(value) for value in candidate["final_topk"]]
         if (
-            str(candidate["final_topk"][0]) != before[index]
-            or "1" not in candidate["final_topk"]
+            before[index] not in topk
+            or "1" not in topk
             or not _best_digit_is_one(candidate)
             or not _straight_geometry(candidate)
         ):

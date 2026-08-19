@@ -128,3 +128,7 @@ Top-20은 후보 회수 상한을 직접 수집 88/95에서 91/95로 넓혔지�
 ### 연산자 십자 슬롯 복원
 
 정확히 `숫자-\bot-숫자`인 3항식에서 Top-20 앞 두 후보가 `\bot/\perp`, 유일한 산술 후보가 `+`, 궤적이 2-stroke 십자 형상일 때만 `+`를 확정하는 배치 가드를 추가했다. 누적 직접 수집은 문자 360/387(93.02%), 식 완전일치 80/95(84.21%)이며 이번 단계의 회귀는 0건이다. CROHME 반복 진단에서는 변경이 없었다. 독립 상업 검증 전까지 `shadow_runtime_only`이며 상세 근거는 [reports/OPERATOR_CROSS_SLOT_RESCUE_LOOP_20260819.md](reports/OPERATOR_CROSS_SLOT_RESCUE_LOOP_20260819.md)에 기록했다.
+
+### 이중 직선 1 피연산자 복원
+
+정확히 `숫자-\div-모호문자-=-모호문자`인 5글자 식에서 두 모호문자가 모두 단일 직선 stroke이고 각 후보의 최상위 숫자가 충분한 차이로 `1`일 때만 두 위치를 함께 복원한다. 누적 직접 수집은 문자 362/387(93.54%), 식 완전일치 81/95(85.26%)이며 이번 단계의 회귀는 0건이다. CROHME 반복 진단에서는 변경이 없었다. 독립 상업 검증 전까지 `shadow_runtime_only`이며 상세 근거는 [reports/DUAL_STRAIGHT_ONE_SLOT_RESCUE_LOOP_20260819.md](reports/DUAL_STRAIGHT_ONE_SLOT_RESCUE_LOOP_20260819.md)에 기록했다.
