@@ -128,3 +128,32 @@ python scripts\raw_formula_context_runtime_v1.py `
 ```
 
 승격 조건은 새로운 상업 이용 가능 project-owned writer/formula-disjoint 데이터에서 분할·문자·식 exact와 동형 문자 비회귀를 모두 다시 통과하는 것이다.
+
+## 2026-08-20 교차 획·공식 배치 개선 결과
+
+이 절은 위의 `130/159` 결과를 대체하는 후속 shadow 결과다. 두 개의 단일 획이 `x` 후보로 합쳐지는 경우만 허용하는 exact-cover 교차 획 병합과, 기존 Top-20 후보 안에서만 작동하는 공식 배치 보정을 런타임에 연결했다. 공식 배치 단계는 앞선 숫자 문맥 보정 결과를 입력으로 받도록 합성 순서도 바로잡았다.
+
+| 평가 집합 | r11 | 이번 결과 |
+|---|---:|---:|
+| 시간순 ownership 49식 | 43/49 (87.76%) | 43/49 (87.76%) |
+| accepted ownership 96식 | 88/96 (91.67%) | **89/96 (92.71%)** |
+| writer_012 제외 public 110식 | 102/110 (92.73%) | **103/110 (93.64%)** |
+| writer_012 휴대폰 재생 49식 | 28/49 (57.14%) | **35/49 (71.43%)** |
+| 전체 유효 159식 | 130/159 (81.76%) | **138/159 (86.79%)** |
+
+- 개선 8식: `aiflow_0092`, `aiflow_0093`, `aiflow_0097`, `aiflow_0098`, `aiflow_0102`, `aiflow_0103`, `aiflow_0112`, `aiflow_0142`
+- 회귀: 0식
+- 단계별 변경: 관계기호 병합 1식, `x` 교차 획 병합 11식, 병합 `x` 후보 잠금 1글자, 공식 배치 1식, 직선형 등호 0식
+- 계약 검증: 모든 획 정확히 1회 사용, 정답·writer·목표 글자 수 입력 없음, 후보 밖 문자 생성 없음, 문자 삽입·삭제 없음, 산술 계산 없음, 제품 기본값 OFF
+- 최종 159식 출력 SHA-256: `ac4325a05d445f4d28578de0b118ca5488f4a6aadeb102d688142bfe2a3c79a6`
+
+현재 결과는 writer_012 및 `aiflow_0142`를 관찰해 gate를 정한 posthoc shadow 결과다. 상용 승격 근거로 쓰려면 새 writer/formula-disjoint acceptance가 필요하다.
+
+### 후속 실행 인자
+
+기존 실행 예에 다음 두 설정을 함께 전달한다.
+
+```powershell
+  --formula-placement-config artifacts\formula_placement_rescue_20260819_r1_shadow\formula_placement_rescue_runtime_config.json `
+  --straight-equality-config artifacts\straight_equality_slot_rescue_20260819_r1_shadow\straight_equality_slot_rescue_runtime_config.json `
+```

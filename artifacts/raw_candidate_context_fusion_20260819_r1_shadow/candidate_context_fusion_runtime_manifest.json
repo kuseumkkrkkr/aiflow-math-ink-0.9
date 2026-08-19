@@ -1,20 +1,20 @@
 {
   "schema": "aiflow-raw-candidate-context-fusion-runtime-manifest/v1",
-  "generated_at": "2026-08-19T15:56:00.4882221Z",
+  "generated_at": "2026-08-19T16:52:52.6940799Z",
   "status": "development_only_posthoc_shadow",
   "shadow_runtime_admitted": true,
   "product_default_admitted": false,
   "configuration": {
     "path": "artifacts/raw_candidate_context_fusion_20260819_r1_shadow/candidate_context_fusion_runtime_config.json",
-    "sha256": "7ea7b11a2fa7d3a4eaa7dc1bb215803c46bc263689e7b856026e4b45fa504f84"
+    "sha256": "d0d65535d6f67f2b0e258e285601a414ea0ae98749f6d069413502f3facf8803"
   },
   "selected_summary": {
     "path": "artifacts/raw_candidate_context_fusion_20260819_r1_shadow/selected_summary.json",
-    "sha256": "1997f7b070e4f107d537d392708650f6070f1bff773fda7d0c2c58c45f8b7634"
+    "sha256": "50c1513d1d67ee8f1c1b7b1b56b18088aa01ffeeaa64e2463c36abafb86ec0d8"
   },
   "evaluation_evidence": {
     "path": "artifacts/raw_candidate_context_fusion_20260819_r1_shadow/evaluation_evidence.json",
-    "sha256": "ac8aa126e35de8bbe5284ffd1bc3635b2e479ed4390b95984197d8414ded543b"
+    "sha256": "29706b9b2ca62cc2512a53f268f353547e479efc571635bb8ecb21e5def876d1"
   },
   "runtime_contract": {
     "restricted_context_candidates": "original frozen HWR Top-5",
@@ -25,6 +25,13 @@
     "relation_merge_candidates": "Top-3 exact-cover coarsening with merged negated relation in HWR Top-5",
     "relation_merge_required_strokes": 3,
     "relation_merge_changes": 1,
+    "cross_merge_candidates": "Top-3 exact-cover two-singleton coarsening with merged HWR and context token x",
+    "cross_merge_required_strokes": 2,
+    "cross_merge_changes": 11,
+    "cross_merge_auxiliary_semantic_lock_changes": 1,
+    "formula_placement_candidates": "product-fused HWR Top-20 candidate union under geometry and formula-role gates",
+    "formula_placement_changes": 1,
+    "straight_equality_changes": 0,
     "singleton_shape_tokens": ["/", "\\times"],
     "dual_numeric_maximum_operand_changes": 2,
     "wide_numeric_maximum_operand_changes": 2,
@@ -34,6 +41,9 @@
     "tokens_outside_admitted_candidate_contract": 0,
     "deleted_glyphs": 0,
     "relation_merge_exact_cover_coarsening_only": true,
+    "cross_merge_exact_cover_coarsening_only": true,
+    "cross_merge_candidate_preserving": true,
+    "formula_placement_candidate_preserving": true,
     "downstream_grouping_mutations_after_relation_merge": 0,
     "dual_numeric_operator_relation_or_fence_mutations": 0,
     "wide_numeric_non_digit_replacements": 0,
@@ -55,14 +65,22 @@
       "formulas": 159,
       "chronological_test_exact_count": 43,
       "chronological_test_total": 49,
-      "accepted_ownership_exact_count": 88,
+      "public_non_phone_exact_count": 103,
+      "public_non_phone_total": 110,
+      "writer_012_phone_replay_exact_count": 35,
+      "writer_012_phone_replay_total": 49,
+      "accepted_ownership_exact_count": 89,
       "accepted_ownership_total": 96,
-      "all_valid_prompt_exact_count": 130,
+      "all_valid_prompt_exact_count": 138,
       "all_valid_prompt_total": 159,
-      "improved_over_candidate_context_runtime": [
-        "aiflow_0010", "aiflow_0052", "aiflow_0058", "aiflow_0068", "aiflow_0086", "aiflow_0090"
+      "improved_over_r11_relation_runtime": [
+        "aiflow_0092", "aiflow_0093", "aiflow_0097", "aiflow_0098",
+        "aiflow_0102", "aiflow_0103", "aiflow_0112", "aiflow_0142"
       ],
-      "improved_over_previous_runtime": ["aiflow_0010"],
+      "improved_over_previous_runtime": [
+        "aiflow_0092", "aiflow_0093", "aiflow_0097", "aiflow_0098",
+        "aiflow_0102", "aiflow_0103", "aiflow_0112", "aiflow_0142"
+      ],
       "regressed_over_previous_runtime": [],
       "all_exact_stroke_cover": true,
       "all_tokens_inside_admitted_candidate_contract": true,
@@ -70,9 +88,15 @@
       "all_wide_numeric_replacements_are_digits": true,
       "relation_merge_changes": 1,
       "relation_merge_exact_cover_coarsening_only": true,
+      "cross_merge_changes": 11,
+      "cross_merge_auxiliary_semantic_lock_changes": 1,
+      "formula_placement_changes": 1,
+      "straight_equality_changes": 0,
+      "cross_merge_exact_cover_coarsening_only": true,
+      "all_cross_and_placement_replacements_inside_candidate_union": true,
       "all_layout_mutations_zero": true,
       "all_product_defaults_disabled": true,
-      "output_sha256": "b2139fdb0a749811ea4d4587d87348a87660082eb17699bb5137fb73a712bc07"
+      "output_sha256": "ac4325a05d445f4d28578de0b118ca5488f4a6aadeb102d688142bfe2a3c79a6"
     }
   },
   "code": {
@@ -85,6 +109,8 @@
     "the auxiliary HWR head was trained with the current 96 formulas",
     "the wide numeric probability threshold was selected on the inspected chronological set",
     "the relation merge thresholds were selected after inspecting the remaining grouping failure",
+    "the cross merge thresholds were selected after inspecting writer_012 phone replay failures",
+    "the formula placement rule was selected after inspecting the remaining public failure aiflow_0142",
     "single-glyph x/times remains unresolved because formula context is absent",
     "fresh commercial writer/formula-disjoint acceptance is required before product promotion"
   ]

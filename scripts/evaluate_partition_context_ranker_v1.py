@@ -107,6 +107,15 @@ RELATION_MERGE_CONFIGURATION = {
     "minimum_component_box_overlap": 0.25,
     "required_merged_strokes": 3,
 }
+CROSS_MERGE_CONFIGURATION = {
+    "maximum_candidate_rank": 3,
+    "minimum_geometry_delta": -12.0,
+    "maximum_pair_gap_ref": 0.30,
+    "minimum_y_overlap": 0.70,
+    "maximum_absolute_aspect_log": 0.40,
+    "required_merged_strokes": 2,
+    "preserve_merged_x_after_auxiliary_fusion": True,
+}
 NEGATED_RELATIONS = frozenset({
     r"\neq", r"\notin", r"\nsubset", r"\nsubseteq",
     r"\nsupset", r"\nsupseteq", r"\nleq", r"\ngeq",
@@ -156,6 +165,50 @@ def _validate_relation_merge_configuration(configuration: dict) -> dict:
         "minimum_ranker_probability": ranker_probability,
         "minimum_component_box_overlap": box_overlap,
         "required_merged_strokes": required_strokes,
+    }
+
+
+def _validate_cross_merge_configuration(configuration: dict) -> dict:
+    expected = {
+        "maximum_candidate_rank", "minimum_geometry_delta",
+        "maximum_pair_gap_ref", "minimum_y_overlap",
+        "maximum_absolute_aspect_log", "required_merged_strokes",
+        "preserve_merged_x_after_auxiliary_fusion",
+    }
+    if set(configuration) != expected:
+        raise ValueError("cross merge configuration fields mismatch")
+    maximum_rank = configuration["maximum_candidate_rank"]
+    required_strokes = configuration["required_merged_strokes"]
+    if (
+        isinstance(maximum_rank, bool)
+        or not isinstance(maximum_rank, int)
+        or not 1 <= maximum_rank <= TOP_N
+        or isinstance(required_strokes, bool)
+        or required_strokes != 2
+    ):
+        raise ValueError("invalid cross merge integer configuration")
+    preserve_token = configuration["preserve_merged_x_after_auxiliary_fusion"]
+    if type(preserve_token) is not bool:
+        raise ValueError("invalid cross merge token preservation configuration")
+    values = {
+        key: float(configuration[key]) for key in (
+            "minimum_geometry_delta", "maximum_pair_gap_ref",
+            "minimum_y_overlap", "maximum_absolute_aspect_log",
+        )
+    }
+    if (
+        not all(math.isfinite(value) for value in values.values())
+        or values["minimum_geometry_delta"] > 0.0
+        or values["maximum_pair_gap_ref"] < 0.0
+        or not 0.0 <= values["minimum_y_overlap"] <= 1.0
+        or values["maximum_absolute_aspect_log"] < 0.0
+    ):
+        raise ValueError("invalid cross merge threshold configuration")
+    return {
+        "maximum_candidate_rank": maximum_rank,
+        **values,
+        "required_merged_strokes": required_strokes,
+        "preserve_merged_x_after_auxiliary_fusion": preserve_token,
     }
 
 
@@ -494,6 +547,192 @@ def _relation_merge_selection(
     }
 
 
+def _cross_merge_selection(
+    partitions: list[dict], selected: dict[str, dict], configuration: dict,
+) -> tuple[dict[str, dict], dict]:
+    configuration = _validate_cross_merge_configuration(configuration)
+    grouped: dict[str, list[dict]] = {}
+    for partition in partitions:
+        grouped.setdefault(partition["sample"].sample_id, []).append(partition)
+    output = dict(selected)
+    changes = []
+    ambiguous = []
+    for sample_id, baseline in selected.items():
+        baseline_groups = [frozenset(group) for group in baseline["groups"]]
+        baseline_tokens = {
+            frozenset(row["group"]): str(token)
+            for row, token in zip(baseline["rows"], baseline["tokens"], strict=True)
+        }
+        admitted = []
+        for candidate in grouped[sample_id]:
+            candidate_groups = [frozenset(group) for group in candidate["groups"]]
+            if (
+                candidate["rank"] > configuration["maximum_candidate_rank"]
+                or float(candidate["geometry_delta"])
+                < configuration["minimum_geometry_delta"]
+                or len(candidate_groups) != len(baseline_groups) - 1
+            ):
+                continue
+            components = {
+                merged: [group for group in baseline_groups if group.issubset(merged)]
+                for merged in candidate_groups
+            }
+            merged_groups = [
+                (merged, groups) for merged, groups in components.items()
+                if len(groups) > 1
+            ]
+            if (
+                len(merged_groups) != 1
+                or len(merged_groups[0][1]) != 2
+                or any(not groups for groups in components.values())
+            ):
+                continue
+            merged, pair = merged_groups[0]
+            if (
+                len(merged) != configuration["required_merged_strokes"]
+                or any(len(group) != 1 for group in pair)
+            ):
+                continue
+            merged_index = next(
+                index for index, row in enumerate(candidate["rows"])
+                if frozenset(row["group"]) == merged
+            )
+            candidate_row = candidate["rows"][merged_index]
+            features = candidate_row["grouping_features"]
+            if (
+                str(candidate["tokens"][merged_index]) != "x"
+                or str(candidate_row["final_topk"][0]) != "x"
+                or float(features["temporal_contiguous"]) != 1.0
+                or float(features["pair_gap_max_ref"])
+                > configuration["maximum_pair_gap_ref"]
+                or float(features["y_overlap_mean"])
+                < configuration["minimum_y_overlap"]
+                or abs(float(features["aspect_log"]))
+                > configuration["maximum_absolute_aspect_log"]
+            ):
+                continue
+            admitted.append((candidate, pair, features))
+        if len(admitted) != 1:
+            if len(admitted) > 1:
+                ambiguous.append(sample_id)
+            continue
+        candidate, pair, features = admitted[0]
+        merged = next(group for group, groups in (
+            (
+                group,
+                [baseline_group for baseline_group in baseline_groups
+                 if baseline_group.issubset(group)],
+            )
+            for group in (frozenset(value) for value in candidate["groups"])
+        ) if len(groups) == 2)
+        merged_row = next(
+            row for row in candidate["rows"]
+            if frozenset(row["group"]) == merged
+        )
+        candidate = {
+            **candidate,
+            "cross_merge_token_locks": (
+                {str(merged_row["record_id"]): "x"}
+                if configuration["preserve_merged_x_after_auxiliary_fusion"]
+                else {}
+            ),
+        }
+        output[sample_id] = candidate
+        changes.append({
+            "formula_id": sample_id,
+            "before_rank": int(baseline["rank"]),
+            "after_rank": int(candidate["rank"]),
+            "before_tokens": list(baseline["tokens"]),
+            "after_tokens": list(candidate["tokens"]),
+            "merged_component_tokens": [baseline_tokens[group] for group in pair],
+            "merged_token": "x",
+            "merged_record_id": str(merged_row["record_id"]),
+            "geometry_delta": float(candidate["geometry_delta"]),
+            "ranker_probability": float(candidate["ranker_probability"]),
+            "pair_gap_max_ref": float(features["pair_gap_max_ref"]),
+            "y_overlap_mean": float(features["y_overlap_mean"]),
+            "aspect_log": float(features["aspect_log"]),
+        })
+    return output, {
+        "enabled": True,
+        "status": "development_only_posthoc_shadow",
+        "configuration": configuration,
+        "changed_formulas": len(changes),
+        "changes": changes,
+        "ambiguous_formulas": ambiguous,
+        "all_strokes_exactly_once": True,
+        "target_label_or_glyph_count_input": False,
+        "arithmetic_evaluation": False,
+    }
+
+
+def _apply_cross_merge_token_locks(
+    rows: list[dict], selected: dict[str, dict],
+) -> tuple[list[dict], dict]:
+    locks = {
+        str(record_id): str(token)
+        for partition in selected.values()
+        for record_id, token in dict(
+            partition.get("cross_merge_token_locks") or {}
+        ).items()
+    }
+    changes = []
+    output = []
+    seen = set()
+    for row in rows:
+        record_id = str(row["record_id"])
+        token = locks.get(record_id)
+        if token is None:
+            output.append(row)
+            continue
+        seen.add(record_id)
+        candidates = []
+        for field in (
+            "final_topk", "baseline_top5", "auxiliary_top5",
+            "candidate_union", "wide_auxiliary_top10",
+        ):
+            candidates.extend(
+                str(value) for value in row.get(field, [])
+                if str(value) not in candidates
+            )
+        if token not in candidates:
+            raise AssertionError(
+                "cross merge token lock left the candidate set: "
+                f"{record_id} token={token!r} candidates={candidates!r}"
+            )
+        before = str(row["finalized_top1"])
+        changed = before != token
+        output.append({
+            **row,
+            "finalized_top1": token,
+            "changed": token != str(row.get("hwr_top1", candidates[0])),
+            "decision_source": (
+                "cross_merge_auxiliary_semantic_lock_v1"
+                if changed else row.get("decision_source")
+            ),
+        })
+        if changed:
+            changes.append({
+                "formula_id": str(row["formula_id"]),
+                "record_id": record_id,
+                "before": before,
+                "after": token,
+            })
+    if seen != set(locks):
+        raise AssertionError("cross merge token lock coverage mismatch")
+    return output, {
+        "enabled": bool(locks),
+        "status": "development_only_posthoc_shadow",
+        "locked_records": len(locks),
+        "changed_glyphs": len(changes),
+        "changes": changes,
+        "candidate_preservation_rate": 1.0,
+        "inserted_or_deleted_glyphs": 0,
+        "grouping_mutations": 0,
+        "arithmetic_evaluation": False,
+    }
+
+
 def _select_gate(train_partitions: list[dict], width: int) -> dict:
     writers = sorted({partition["sample"].writer for partition in train_partitions})
     held_rows = []
@@ -752,6 +991,7 @@ def _score_finalized(
             }
             for row in restricted_finalized
         ]
+        final_rows = combined_rows
         combined_score = score(combined_rows, runtime_rows)
         combined_failures = {
             str(row["sample_id"]) for row in combined_score["failures"]
@@ -765,6 +1005,7 @@ def _score_finalized(
             combined_rows, singleton_rows, auxiliary_finalized,
             singleton_auxiliary["numeric_configuration"],
         )
+        final_rows = numeric_rows
         union_candidates = [
             {
                 "record_id": row["record_id"],
@@ -787,6 +1028,7 @@ def _score_finalized(
         wide_finalized, wide_audit = apply_wide_candidate_syntax_rescue(
             numeric_rows, wide_rows, singleton_auxiliary["wide_configuration"],
         )
+        final_rows = wide_finalized
         numeric_candidates = {
             str(row["record_id"]): list(row["candidate_union"])
             for row in numeric_rows
@@ -818,13 +1060,26 @@ def _score_finalized(
         placement_rows, placement_audit = apply_formula_placement_rescue(
             final_rows, auxiliary_rows, auxiliary["placement_configuration"],
         )
+        final_rows = placement_rows
         placement_score = score(placement_rows, auxiliary_rows)
         final_rows, equality_audit = apply_straight_equality_slot_rescue(
-            placement_rows, auxiliary_rows, auxiliary["equality_configuration"],
+            final_rows, auxiliary_rows, auxiliary["equality_configuration"],
         )
         equality_score = score(final_rows, auxiliary_rows)
+    lock_rows, cross_lock_audit = _apply_cross_merge_token_locks(
+        final_rows, selected,
+    )
+    if auxiliary_rows is not None:
+        lock_candidates = auxiliary_rows
+    elif wide_score is not None:
+        lock_candidates = wide_union_candidates
+    elif numeric_score is not None:
+        lock_candidates = union_candidates
+    else:
+        lock_candidates = runtime_rows
+    final_rows = lock_rows
+    final_score = score(final_rows, lock_candidates)
     total = len(samples)
-    final_score = equality_score or wide_score or numeric_score or combined_score or singleton_score or base
     result = {
         "formula_exact_count": base["exact"],
         "formula_exact": base["exact"] / total,
@@ -850,6 +1105,7 @@ def _score_finalized(
             "wide_numeric_syntax_rescue": wide_audit,
             "formula_placement": placement_audit,
             "straight_equality": equality_audit,
+            "cross_merge_auxiliary_semantic_lock": cross_lock_audit,
         },
     }
     if singleton_rows is not None and singleton_score is not None:
@@ -1188,6 +1444,12 @@ def main() -> int:
     relation_merge_guard, relation_merge_audit = _relation_merge_selection(
         test_partitions, context_design_guard, relation_merge_configuration,
     )
+    cross_merge_configuration = _validate_cross_merge_configuration(
+        CROSS_MERGE_CONFIGURATION,
+    )
+    cross_merge_guard, cross_merge_audit = _cross_merge_selection(
+        test_partitions, relation_merge_guard, cross_merge_configuration,
+    )
     scores = {
         "geometry_top1": _score(test, geometry_selected, truth_labels),
         "geometry_hwr_ranker": _score(test, hwr_selected, truth_labels),
@@ -1199,6 +1461,9 @@ def main() -> int:
         ),
         "relation_merge_guard": _score(
             test, relation_merge_guard, truth_labels,
+        ),
+        "cross_merge_guard": _score(
+            test, cross_merge_guard, truth_labels,
         ),
     }
     finalized_scores = {
@@ -1214,18 +1479,22 @@ def main() -> int:
             test, relation_merge_guard, truth_labels, finalizer, auxiliary,
             singleton_auxiliary,
         ),
+        "cross_merge_guard": _score_finalized(
+            test, cross_merge_guard, truth_labels, finalizer, auxiliary,
+            singleton_auxiliary,
+        ),
     }
     baseline = scores["geometry_top1"]
-    candidate = scores["relation_merge_guard"]
+    candidate = scores["cross_merge_guard"]
     baseline_ids = {sample.sample_id for sample in test if geometry_selected[sample.sample_id]["truth"]}
-    candidate_ids = {sample.sample_id for sample in test if relation_merge_guard[sample.sample_id]["truth"]}
+    candidate_ids = {sample.sample_id for sample in test if cross_merge_guard[sample.sample_id]["truth"]}
     comparison = {
         "grouping_improved": sorted(candidate_ids - baseline_ids),
         "grouping_regressed": sorted(baseline_ids - candidate_ids),
         "grouping_exact_delta": candidate["grouping_exact_count"] - baseline["grouping_exact_count"],
         "context_formula_exact_delta": candidate["context_formula_exact_count"] - baseline["context_formula_exact_count"],
         "finalized_formula_exact_delta": (
-            finalized_scores["relation_merge_guard"]["final_formula_exact_count"]
+            finalized_scores["cross_merge_guard"]["final_formula_exact_count"]
             - finalized_scores["geometry_top1"]["final_formula_exact_count"]
         ),
     }
@@ -1238,6 +1507,7 @@ def main() -> int:
         "hwr_checkpoint_sha256": _sha256(hwr_path), "context_checkpoint_sha256": _sha256(context_path),
         "selection_guard": POSTHOC_DESIGN_GUARD,
         "relation_merge_guard": relation_merge_configuration,
+        "cross_merge_guard": cross_merge_configuration,
         "finalizer_contract": {
             "formula_layout": True,
             "semantic_guards": True,
@@ -1275,6 +1545,7 @@ def main() -> int:
                 "status": "development_only_after_inspecting_49_formula_failures",
             },
             "relation_merge_guard": relation_merge_audit,
+            "cross_merge_guard": cross_merge_audit,
         },
         "scores": scores, "finalized_scores": finalized_scores, "comparison": comparison,
         "selection_changes": {
@@ -1285,6 +1556,9 @@ def main() -> int:
             ),
             "relation_merge_guard": _selection_changes(
                 context_design_guard, relation_merge_guard,
+            ),
+            "cross_merge_guard": _selection_changes(
+                relation_merge_guard, cross_merge_guard,
             ),
         },
         "artifact": {"file": model_path.name, "sha256": _sha256(model_path), "feature_names": list(FEATURE_NAMES)},

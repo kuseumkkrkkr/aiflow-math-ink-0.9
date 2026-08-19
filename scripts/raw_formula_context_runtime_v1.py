@@ -32,11 +32,22 @@ from wide_candidate_syntax_rescue_v1 import (
     apply_wide_candidate_syntax_rescue,
     validate_configuration as validate_wide_syntax_configuration,
 )
+from formula_placement_rescue_v1 import (
+    CONFIG_SCHEMA as PLACEMENT_CONFIG_SCHEMA, SCHEMA as PLACEMENT_SCHEMA,
+    apply_formula_placement_rescue,
+    validate_configuration as validate_placement_configuration,
+)
+from straight_equality_slot_rescue_v1 import (
+    CONFIG_SCHEMA as EQUALITY_CONFIG_SCHEMA, SCHEMA as EQUALITY_SCHEMA,
+    apply_straight_equality_slot_rescue,
+    validate_configuration as validate_equality_configuration,
+)
 from evaluate_partition_context_ranker_v1 import (
     FEATURE_NAMES, POSTHOC_DESIGN_GUARD, SCHEMA as RANKER_SCHEMA,
-    _attach_features, _auxiliary_rows, _gate_accept, _geometry_selection,
-    _partition_rows, _relation_merge_selection, _select,
-    _validate_relation_merge_configuration,
+    _apply_cross_merge_token_locks, _attach_features, _auxiliary_rows,
+    _cross_merge_selection, _gate_accept, _geometry_selection, _partition_rows,
+    _relation_merge_selection, _select, _shadow_configuration,
+    _validate_cross_merge_configuration, _validate_relation_merge_configuration,
 )
 from finalize_formula_context_v1 import DEFAULT_CONTEXT, OwnedFormulaContextFinalizer
 from singleton_shape_rescue_v1 import (
@@ -149,6 +160,9 @@ class RawFormulaContextRuntimeV1:
     numeric_configuration: dict[str, Any] | None
     wide_syntax_configuration: dict[str, Any] | None
     relation_merge_configuration: dict[str, Any] | None
+    cross_merge_configuration: dict[str, Any] | None
+    placement_configuration: dict[str, Any] | None
+    equality_configuration: dict[str, Any] | None
     singleton_config_sha256: str | None
     singleton_hwr_sha256: str | None
 
@@ -160,6 +174,8 @@ class RawFormulaContextRuntimeV1:
         formula_syntax_rescue_config: Path | None = None,
         candidate_context_fusion_config: Path | None = None,
         candidate_context_auxiliary_hwr_checkpoint: Path | None = None,
+        formula_placement_config: Path | None = None,
+        straight_equality_config: Path | None = None,
         allow_posthoc_shadow: bool = False,
     ) -> "RawFormulaContextRuntimeV1":
         ranker_path = Path(partition_ranker).expanduser().resolve()
@@ -227,11 +243,20 @@ class RawFormulaContextRuntimeV1:
             raise ValueError(
                 "candidate context fusion config and auxiliary HWR checkpoint are required together"
             )
+        if bool(formula_placement_config) != bool(straight_equality_config):
+            raise ValueError(
+                "formula placement and straight equality configs are required together"
+            )
+        if formula_placement_config is not None and candidate_context_fusion_config is None:
+            raise ValueError("formula placement requires candidate context fusion")
         singleton_hwr = None
         singleton_configuration = None
         numeric_configuration = None
         wide_syntax_configuration = None
         relation_merge_configuration = None
+        cross_merge_configuration = None
+        placement_configuration = None
+        equality_configuration = None
         singleton_config_sha256 = None
         singleton_hwr_sha256 = None
         if candidate_context_fusion_config is not None:
@@ -254,6 +279,9 @@ class RawFormulaContextRuntimeV1:
             numeric_mode = dict(mode.get("dual_numeric_rescue") or {})
             wide_syntax_mode = dict(mode.get("wide_numeric_syntax_rescue") or {})
             relation_merge_mode = dict(mode.get("relation_merge_rescue") or {})
+            cross_merge_mode = dict(mode.get("cross_merge_rescue") or {})
+            placement_mode = dict(mode.get("formula_placement_rescue") or {})
+            equality_mode = dict(mode.get("straight_equality_rescue") or {})
             if (
                 singleton_payload.get("schema") != CANDIDATE_FUSION_CONFIG_SCHEMA
                 or singleton_payload.get("rescue_schema") != SINGLETON_SCHEMA
@@ -297,12 +325,86 @@ class RawFormulaContextRuntimeV1:
                 }
             ):
                 raise ValueError("candidate context fusion shadow contract mismatch")
+            cross_payload = singleton_payload.get("cross_merge_configuration")
+            if bool(cross_payload) != bool(cross_merge_mode):
+                raise ValueError("candidate context cross merge presence mismatch")
+            if cross_payload:
+                cross_merge_configuration = _validate_cross_merge_configuration(
+                    dict(cross_payload),
+                )
+                if cross_merge_mode != {
+                    "enabled": True,
+                    "maximum_candidate_rank": 3,
+                    "exact_cover_coarsening_only": True,
+                    "required_merged_strokes": 2,
+                    "merged_hwr_and_context_token": "x",
+                    "preserve_merged_x_after_auxiliary_fusion": True,
+                    "target_label_or_glyph_count_input": False,
+                    "arithmetic_evaluation": False,
+                }:
+                    raise ValueError("candidate context cross merge mode mismatch")
+                if (
+                    cross_merge_configuration["maximum_candidate_rank"]
+                    != cross_merge_mode["maximum_candidate_rank"]
+                    or cross_merge_configuration["required_merged_strokes"]
+                    != cross_merge_mode["required_merged_strokes"]
+                    or cross_merge_configuration[
+                        "preserve_merged_x_after_auxiliary_fusion"
+                    ] is not True
+                ):
+                    raise ValueError("candidate context cross merge configuration mismatch")
+            placement_paths_present = (
+                formula_placement_config is not None
+                and straight_equality_config is not None
+            )
+            if placement_paths_present != bool(placement_mode and equality_mode):
+                raise ValueError("candidate context placement config presence mismatch")
+            placement_path = equality_path = None
+            if placement_paths_present:
+                placement_path = Path(formula_placement_config).expanduser().resolve()
+                equality_path = Path(straight_equality_config).expanduser().resolve()
+                for path in (placement_path, equality_path):
+                    if not path.is_file():
+                        raise FileNotFoundError(path)
+                placement_raw, _ = _shadow_configuration(
+                    placement_path, config_schema=PLACEMENT_CONFIG_SCHEMA,
+                    rescue_schema=PLACEMENT_SCHEMA,
+                )
+                equality_raw, _ = _shadow_configuration(
+                    equality_path, config_schema=EQUALITY_CONFIG_SCHEMA,
+                    rescue_schema=EQUALITY_SCHEMA,
+                )
+                placement_configuration = validate_placement_configuration(
+                    placement_raw,
+                )
+                equality_configuration = validate_equality_configuration(
+                    equality_raw,
+                )
+                if placement_mode != {
+                    "enabled": True,
+                    "candidate_width": 20,
+                    "candidate_contract": "product_fused_top20",
+                    "insertions_or_deletions": 0,
+                    "arithmetic_evaluation": False,
+                } or equality_mode != {
+                    "enabled": True,
+                    "candidate_width": 20,
+                    "candidate_contract": "product_fused_top20",
+                    "maximum_changes_per_formula": 1,
+                    "arithmetic_evaluation": False,
+                }:
+                    raise ValueError("candidate context placement mode mismatch")
             expected_hashes = {
                 "partition_ranker_sha256": _sha256(ranker_path),
                 "hwr_checkpoint_sha256": _sha256(hwr_path),
                 "context_checkpoint_sha256": _sha256(context_path),
                 "auxiliary_hwr_checkpoint_sha256": _sha256(singleton_hwr_path),
             }
+            if placement_paths_present:
+                expected_hashes.update({
+                    "formula_placement_config_sha256": _sha256(placement_path),
+                    "straight_equality_config_sha256": _sha256(equality_path),
+                })
             if any(artifacts.get(key) != value for key, value in expected_hashes.items()):
                 raise ValueError("candidate context fusion artifact hash mismatch")
             evidence = dict(singleton_payload.get("evidence") or {})
@@ -353,6 +455,13 @@ class RawFormulaContextRuntimeV1:
                 or wide_syntax_configuration["candidate_width"] != 10
             ):
                 raise ValueError("candidate context fusion wide syntax policy mismatch")
+            if placement_configuration is not None and (
+                placement_configuration["unmatched_fence_operand"]["auxiliary_weight"]
+                != singleton_configuration["auxiliary_weight"]
+                or equality_configuration["auxiliary_weight"]
+                != singleton_configuration["auxiliary_weight"]
+            ):
+                raise ValueError("candidate context placement fusion policy mismatch")
             singleton_hwr, singleton_labels, _ = _load_model(
                 singleton_hwr_path, resolved_device,
             )
@@ -376,6 +485,8 @@ class RawFormulaContextRuntimeV1:
             payload, hwr, labels, finalizer, resolved_device, _sha256(ranker_path),
             singleton_hwr, singleton_configuration, numeric_configuration,
             wide_syntax_configuration, relation_merge_configuration,
+            cross_merge_configuration, placement_configuration,
+            equality_configuration,
             singleton_config_sha256,
             singleton_hwr_sha256,
         )
@@ -448,6 +559,14 @@ class RawFormulaContextRuntimeV1:
         relation_merge_changed = bool(
             relation_merge_audit.get("changed_formulas", 0)
         )
+        cross_merge_audit = {"enabled": False}
+        if self.cross_merge_configuration is not None:
+            cross_selected, cross_merge_audit = _cross_merge_selection(
+                partitions, {sample.sample_id: selected},
+                self.cross_merge_configuration,
+            )
+            selected = cross_selected[sample.sample_id]
+        cross_merge_changed = bool(cross_merge_audit.get("changed_formulas", 0))
         runtime_rows = [
             {
                 **{
@@ -500,6 +619,24 @@ class RawFormulaContextRuntimeV1:
             finalized, wide_syntax_audit = apply_wide_candidate_syntax_rescue(
                 finalized, wide_rows, self.wide_syntax_configuration,
             )
+            placement_audit = {"enabled": False}
+            equality_audit = {"enabled": False}
+            if self.placement_configuration is not None:
+                top20_rows = _auxiliary_rows(
+                    [sample], {sample.sample_id: selected}, fused_probability,
+                    slices, self.labels, width=20,
+                    policy=self.singleton_configuration["auxiliary_policy"],
+                    weight=weight,
+                )
+                finalized, placement_audit = apply_formula_placement_rescue(
+                    finalized, top20_rows, self.placement_configuration,
+                )
+                finalized, equality_audit = apply_straight_equality_slot_rescue(
+                    finalized, top20_rows, self.equality_configuration,
+                )
+            finalized, cross_lock_audit = _apply_cross_merge_token_locks(
+                finalized, {sample.sample_id: selected},
+            )
             singleton_audit = {
                 **singleton_audit,
                 "restricted_candidate_rerank": {
@@ -511,9 +648,15 @@ class RawFormulaContextRuntimeV1:
                 "dual_numeric_auxiliary_finalizer": auxiliary_finalizer_audit,
                 "dual_numeric_rescue": numeric_audit,
                 "wide_numeric_syntax_rescue": wide_syntax_audit,
+                "formula_placement_rescue": placement_audit,
+                "straight_equality_rescue": equality_audit,
+                "cross_merge_auxiliary_semantic_lock": cross_lock_audit,
             }
         else:
             finalized, finalizer_audit = self.finalizer.finalize(runtime_rows)
+            finalized, cross_lock_audit = _apply_cross_merge_token_locks(
+                finalized, {sample.sample_id: selected},
+            )
         finalized.sort(key=lambda row: int(row["context_index"]))
         runtime_by_record = {str(row["record_id"]): row for row in runtime_rows}
         source_by_group = {
@@ -583,6 +726,7 @@ class RawFormulaContextRuntimeV1:
                 "design_gate_partition_change_accepted": bool(accepted),
                 "partition_change_source": (
                     "relation_merge_rescue" if relation_merge_changed else
+                    "cross_merge_rescue" if cross_merge_changed else
                     "posthoc_design_guard" if accepted else "geometry_baseline"
                 ),
                 "ranker_probability_gain": float(
@@ -601,6 +745,7 @@ class RawFormulaContextRuntimeV1:
                 "candidate_context_fusion": {
                     **singleton_audit,
                     "relation_merge_rescue": relation_merge_audit,
+                    "cross_merge_rescue": cross_merge_audit,
                     "enabled": self.singleton_hwr is not None,
                     "configuration_sha256": self.singleton_config_sha256,
                     "auxiliary_hwr_checkpoint_sha256": self.singleton_hwr_sha256,
@@ -681,6 +826,8 @@ def main() -> int:
     parser.add_argument("--formula-syntax-rescue-config", type=Path)
     parser.add_argument("--candidate-context-fusion-config", type=Path)
     parser.add_argument("--candidate-context-auxiliary-hwr-checkpoint", type=Path)
+    parser.add_argument("--formula-placement-config", type=Path)
+    parser.add_argument("--straight-equality-config", type=Path)
     parser.add_argument("--input", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
@@ -709,6 +856,8 @@ def main() -> int:
         formula_syntax_rescue_config=args.formula_syntax_rescue_config,
         candidate_context_fusion_config=args.candidate_context_fusion_config,
         candidate_context_auxiliary_hwr_checkpoint=args.candidate_context_auxiliary_hwr_checkpoint,
+        formula_placement_config=args.formula_placement_config,
+        straight_equality_config=args.straight_equality_config,
         allow_posthoc_shadow=args.allow_posthoc_shadow,
     )
     results = [runtime.infer(row) for row in _load_inputs(input_path)]

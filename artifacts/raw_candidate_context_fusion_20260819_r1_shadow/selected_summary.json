@@ -1,6 +1,6 @@
 {
   "schema": "aiflow-raw-candidate-context-fusion-selection/v1",
-  "generated_at": "2026-08-19T15:56:00.4882221Z",
+  "generated_at": "2026-08-19T16:52:52.6940799Z",
   "status": "development_only_posthoc_shadow",
   "dataset": {
     "formulas": 96,
@@ -19,12 +19,14 @@
     "exact-cover stroke partition",
     "frozen 372-class HWR Top-5",
     "overlapping base-relation and slash components may coarsen only to one negated-relation Top-5 candidate",
+    "two temporally contiguous crossing singleton strokes may coarsen only when both HWR and context select x and the geometry gate passes",
     "old/new HWR probability fusion at 0.4:0.6",
     "reorder only the original Top-5 candidate set",
     "masked-context, layout, semantic, sequence, and syntax finalizer",
     "singleton slash/times rescue only within the original Top-5",
     "numeric operand rescue only from the baseline and auxiliary Top-5 union",
-    "unique minimum numeric-syntax repair only from the product-fused Top-10 union"
+    "unique minimum numeric-syntax repair only from the product-fused Top-10 union",
+    "candidate-preserving Top-20 formula placement and straight-equality guards"
   ],
   "scores": {
     "grouping_exact": {"count": 49, "total": 49, "rate": 1.0},
@@ -35,7 +37,10 @@
     "wide_numeric_syntax_final": {"count": 43, "total": 49, "rate": 0.8775510204081632},
     "original_top5_formula_oracle": {"count": 42, "total": 49, "rate": 0.8571428571428571},
     "dual_hwr_top5_union_formula_oracle": {"count": 47, "total": 49, "rate": 0.9591836734693877},
-    "product_fused_top10_union_formula_oracle": {"count": 48, "total": 49, "rate": 0.9795918367346939}
+    "product_fused_top10_union_formula_oracle": {"count": 48, "total": 49, "rate": 0.9795918367346939},
+    "product_fused_top20_union_formula_oracle": {"count": 48, "total": 49, "rate": 0.9795918367346939},
+    "formula_placement_final": {"count": 43, "total": 49, "rate": 0.8775510204081632},
+    "straight_equality_final": {"count": 43, "total": 49, "rate": 0.8775510204081632}
   },
   "comparison": {
     "improved_formula_ids": ["aiflow_0010", "aiflow_0049", "aiflow_0052", "aiflow_0058", "aiflow_0078"],
@@ -45,9 +50,16 @@
     "tokens_outside_dual_hwr_union": 0,
     "deleted_glyphs": 0,
     "relation_merge_grouping_changes": 1,
+    "cross_merge_grouping_changes": 0,
+    "formula_placement_changes": 0,
+    "straight_equality_changes": 0,
     "relation_merge_exact_cover_coarsening_only": true,
+    "cross_merge_exact_cover_coarsening_only": true,
+    "cross_merge_merged_hwr_and_context_token": "x",
+    "cross_merge_auxiliary_semantic_lock_candidate_preserving": true,
     "dual_numeric_operator_relation_or_fence_mutations": 0,
     "wide_numeric_non_digit_replacements": 0,
+    "formula_placement_tokens_outside_top20": 0,
     "layout_mutations": 0
   },
   "remaining_failures": {
@@ -69,6 +81,11 @@
     "relation_merge_maximum_candidate_rank": 3,
     "relation_merge_required_merged_strokes": 3,
     "relation_merge_exact_cover_coarsening_only": true,
+    "cross_merge_candidate_contract": "Top-3 exact-cover two-singleton coarsening with merged HWR and context token x",
+    "cross_merge_required_merged_strokes": 2,
+    "cross_merge_maximum_pair_gap_ref": 0.3,
+    "cross_merge_minimum_y_overlap": 0.7,
+    "cross_merge_auxiliary_semantic_lock": true,
     "restricted_context_original_top5_candidate_set_preserved": true,
     "dual_numeric_candidate_contract": "baseline_and_auxiliary_top5_union",
     "dual_numeric_maximum_operand_to_digit_changes": 2,
@@ -76,6 +93,9 @@
     "wide_numeric_unique_minimum_repair_required": true,
     "wide_numeric_minimum_digit_probability_ratio": 0.005,
     "wide_numeric_equality_replacement": false,
+    "formula_placement_candidate_contract": "product_fused_top20",
+    "formula_placement_inserted_or_deleted_glyphs": 0,
+    "straight_equality_maximum_changes_per_formula": 1,
     "dual_numeric_operator_relation_or_fence_mutations": 0,
     "wide_numeric_non_digit_replacements": 0,
     "layout_mutations": 0,
@@ -96,11 +116,13 @@
     "the dual numeric gate expands one baseline Top-5 only through the admitted auxiliary Top-5 union",
     "the wide numeric gate was threshold-selected on the repeatedly inspected 49-formula set",
     "the relation merge thresholds were selected after inspecting the remaining grouping failure",
+    "the cross merge thresholds were selected after inspecting writer_012 phone replay failures",
+    "the Top-20 placement guards were previously selected on inspected project-owned development data",
     "a single-glyph x/times homograph has no formula context and remains unresolved",
     "fresh commercial project-owned writer/formula-disjoint acceptance is required before product default"
   ],
   "source_probe": {
     "path": "evaluation_evidence.json",
-    "sha256": "ac8aa126e35de8bbe5284ffd1bc3635b2e479ed4390b95984197d8414ded543b"
+    "sha256": "29706b9b2ca62cc2512a53f268f353547e479efc571635bb8ecb21e5def876d1"
   }
 }
