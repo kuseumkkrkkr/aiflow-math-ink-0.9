@@ -24,6 +24,10 @@ from character_tensor_v1 import ROOT, _json_lines
 from evaluate_homograph_context_reranker_v1 import _metrics
 import train_context_decision_layer_v1 as context
 import train_masked_context_reranker_v1 as masked
+from supported_exact_context_guard_v1 import (
+    STRONG_EXACT_CONTEXT_SCALE,
+    apply_supported_exact_context_guard,
+)
 
 
 SCHEMA = "aiflow-owned-formula-context/v1"
@@ -730,6 +734,31 @@ def decide_owned_formula_rows(
         payload["label_support"],
         payload["top1_reliability"],
     )
+
+
+def decide_owned_formula_rows_supported_exact(
+    model: OwnedFormulaContext, contract: dict, payload: dict, rows: list[dict],
+    device: torch.device, batch_size: int = 128,
+) -> tuple[dict[str, str], dict]:
+    components = _components(
+        model, contract, rows, payload["role_grammar"], device, batch_size
+    )
+    baseline, audit = context._predict(
+        components, payload["configuration"], payload["label_support"],
+        payload["top1_reliability"],
+    )
+    stronger, _ = context._predict(
+        components,
+        {
+            **payload["configuration"],
+            "exact_context_scale": STRONG_EXACT_CONTEXT_SCALE,
+        },
+        payload["label_support"], payload["top1_reliability"],
+    )
+    finalized, guard_audit = apply_supported_exact_context_guard(
+        rows, baseline, stronger, payload["label_support"]
+    )
+    return finalized, {**audit, "supported_exact_context": guard_audit}
 
 
 def _assert_candidate_contract(name: str, audit: dict) -> None:

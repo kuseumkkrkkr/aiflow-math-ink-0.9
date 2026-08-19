@@ -20,7 +20,7 @@ from semantic_infix_guard_v1 import apply_semantic_infix_guard
 import train_masked_context_reranker_v1 as masked
 from train_owned_formula_context_v1 import (
     _assert_candidate_contract,
-    decide_owned_formula_rows,
+    decide_owned_formula_rows_supported_exact,
     load_owned_formula_context,
 )
 
@@ -108,7 +108,7 @@ def main() -> int:
     )
     direct_path = input_root / "direct_candidates.jsonl.gz"
     direct_rows = list(_json_lines(direct_path))
-    direct_context, direct_runtime = decide_owned_formula_rows(
+    direct_context, direct_runtime = decide_owned_formula_rows_supported_exact(
         model, contract, payload, direct_rows, device, args.batch_size
     )
     probability_ratio_floor = float(
@@ -133,6 +133,7 @@ def main() -> int:
         "training_performed": False,
         "runtime_pipeline": [
             "owned_formula_context_r6",
+            "owned_supported_exact_context_guard_v1",
             "semantic_equation_guard_v2",
             "semantic_fence_guard_v1",
             "semantic_infix_guard_v1",
@@ -160,7 +161,7 @@ def main() -> int:
     crohme_path = input_root / "crohme_candidates.jsonl.gz"
     if crohme_path.is_file():
         crohme_rows = list(_json_lines(crohme_path))
-        crohme_context, crohme_runtime = decide_owned_formula_rows(
+        crohme_context, crohme_runtime = decide_owned_formula_rows_supported_exact(
             model, contract, payload, crohme_rows, device, args.batch_size
         )
         crohme_equation, crohme_equation_audit = apply_semantic_equation_guard_v2(

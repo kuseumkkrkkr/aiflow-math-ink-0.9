@@ -4,7 +4,8 @@
 The runtime never receives truth labels and never creates a token, deletes a
 glyph, or changes stroke ownership. Load ``OwnedFormulaContextFinalizer`` once
 per process, then call ``finalize`` for each candidate batch. The selected r6
-context model is followed by equation, locked-fence, and horizontal-infix guards.
+context model is followed by a support-aware exact-context gate, then equation,
+locked-fence, and horizontal-infix guards.
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ from semantic_fence_guard_v1 import apply_semantic_fence_guard
 from semantic_infix_guard_v1 import apply_semantic_infix_guard
 import train_masked_context_reranker_v1 as masked
 from train_owned_formula_context_v1 import (
-    decide_owned_formula_rows,
+    decide_owned_formula_rows_supported_exact,
     load_owned_formula_context,
 )
 
@@ -81,7 +82,7 @@ def _runtime_rows(rows: list[dict], labels: set[str]) -> list[dict]:
 
 def _decision_metadata(
     row: dict, hwr: str, context_token: str, equation_token: str,
-    fence_token: str, final_token: str,
+    fence_token: str, final_token: str, supported_exact: bool = False,
 ) -> tuple[bool, str, str]:
     context_available = int(row["context"]["length"]) > 1
     if not context_available:
@@ -92,6 +93,8 @@ def _decision_metadata(
         source = "semantic_fence_guard"
     elif equation_token != context_token:
         source = "semantic_equation_guard_v2"
+    elif supported_exact:
+        source = "owned_supported_exact_context_guard"
     elif context_token != hwr:
         source = "owned_formula_context"
     else:
@@ -132,10 +135,14 @@ class OwnedFormulaContextFinalizer:
 
     def finalize(self, rows: list[dict]) -> tuple[list[dict], dict]:
         runtime_rows = _runtime_rows(rows, self.labels)
-        context_predictions, model_audit = decide_owned_formula_rows(
+        context_predictions, model_audit = decide_owned_formula_rows_supported_exact(
             self.model, self.contract, self.payload, runtime_rows,
             self.device, self.batch_size,
         )
+        supported_exact_records = {
+            str(change["record_id"])
+            for change in model_audit["supported_exact_context"]["changes"]
+        }
         if self.semantic_guards:
             probability_ratio_floor = float(
                 self.payload["configuration"]["candidate_probability_ratio_floor"]
@@ -174,6 +181,7 @@ class OwnedFormulaContextFinalizer:
                 str(equation_predictions[record_id]),
                 str(fence_predictions[record_id]),
                 prediction,
+                record_id in supported_exact_records,
             )
             output.append({
                 "schema": "aiflow-formula-context-finalized/v4",
@@ -192,7 +200,10 @@ class OwnedFormulaContextFinalizer:
         return output, {
             "context_checkpoint_sha256": self.checkpoint_sha256,
             "hwr_checkpoint_sha256": self.hwr_checkpoint_sha256,
-            "pipeline": ["owned_formula_context_r6"] + (
+            "pipeline": [
+                "owned_formula_context_r6",
+                "owned_supported_exact_context_guard_v1",
+            ] + (
                 [
                     "semantic_equation_guard_v2",
                     "semantic_fence_guard_v1",
@@ -241,6 +252,9 @@ def _self_test() -> None:
     assert _decision_metadata(contextual, "1", "1", "1", "1", "+") == (
         True, "finalized", "semantic_infix_guard",
     )
+    assert _decision_metadata(
+        contextual, "h", "b", "b", "b", "b", True
+    ) == (True, "finalized", "owned_supported_exact_context_guard")
     try:
         _runtime_rows([{**rows[0], "final_topk": ["1", "x"]}], labels)
     except ValueError:
