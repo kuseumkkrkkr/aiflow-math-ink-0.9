@@ -104,3 +104,9 @@ Google BERT-Tiny에 372개 문자 token과 7개 공간관계 token을 추가한 
 문맥이 없는 길이 1 수식은 후단 임베딩만으로 확정할 근거가 없으므로, 기존 372-class HWR Top-5를 유지한 채 writer-LOO 보조 shape head를 제한적으로 사용한다. 직접 수집 95식에서 `/`와 `\times` 두 건만 복원해 문자 Top-1은 349/387(90.18%)에서 351/387(90.70%), 수식 완전일치는 72/95(75.79%)에서 74/95(77.89%)로 증가했고 회귀는 0건이다. 외부 collision-free 18,330글자 진단도 8건 개선·회귀 0건이었다.
 
 이 경로는 고정 HWR Top-5 밖을 선택하지 않고 새 token·삭제·grouping 변경을 하지 않는다. 다만 임계값은 반복 관찰된 직접 수집식에서 정했고 CROHME 평가 분할에는 단일기호 수식이 없으므로 `shadow_runtime_only`다. 구현·기각 분기·SHA와 승격 조건은 [reports/SINGLETON_SHAPE_RESCUE_LOOP_20260819.md](reports/SINGLETON_SHAPE_RESCUE_LOOP_20260819.md)에 기록했다.
+
+### 이중 HWR 숫자 operand 복원
+
+전면 HWR fusion은 직접식 회귀 때문에 사용하지 않는다. 대신 기존 경로가 숫자 문법으로 무효이고 보조 경로의 `operand→숫자` 변경만으로 처음 유효해질 때, 한 식에서 최대 두 글자만 보조 경로에서 받는다. 직접 수집은 문자 355/387(91.73%), 수식 완전일치 76/95(80.00%)로 올랐고 CROHME 반복 진단도 286/984식으로 2식 증가했다. 두 범위 모두 문자·수식 회귀는 0건이다.
+
+이 레이어는 기존 Top-5를 고집하지 않고 기존·보조 HWR Top-5 합집합을 권위 후보로 사용한다. 직접 3글자와 CROHME 2글자가 기존 Top-5 밖에서 회복됐지만 합집합 밖 생성, 연산자·관계·괄호·배치·grouping 변경은 0건이다. 계약 변경과 이중 추론 비용이 있으므로 `shadow_runtime_only`이며, 구현·평가·SHA는 [reports/DUAL_HWR_NUMERIC_RESCUE_LOOP_20260819.md](reports/DUAL_HWR_NUMERIC_RESCUE_LOOP_20260819.md)에 기록했다.
