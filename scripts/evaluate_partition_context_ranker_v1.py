@@ -100,6 +100,63 @@ PRODUCT_WIDE_SYNTAX_CONFIGURATION = {
     "allow_equality_replacement": False,
     "literal_alpha_operand_lock": True,
 }
+RELATION_MERGE_CONFIGURATION = {
+    "maximum_candidate_rank": 3,
+    "minimum_geometry_delta": -5.0,
+    "minimum_ranker_probability": 0.05,
+    "minimum_component_box_overlap": 0.25,
+    "required_merged_strokes": 3,
+}
+NEGATED_RELATIONS = frozenset({
+    r"\neq", r"\notin", r"\nsubset", r"\nsubseteq",
+    r"\nsupset", r"\nsupseteq", r"\nleq", r"\ngeq",
+})
+BASE_RELATION_TOKENS = frozenset({
+    "=", "<", ">", r"\leq", r"\geq", r"\approx", r"\simeq", r"\equiv",
+})
+SLASH_COMPONENT_TOKENS = frozenset({
+    "1", "I", "l", "|", "/", r"\backslash", r"\mid", r"\prime",
+})
+
+
+def _validate_relation_merge_configuration(configuration: dict) -> dict:
+    expected = {
+        "maximum_candidate_rank", "minimum_geometry_delta",
+        "minimum_ranker_probability", "minimum_component_box_overlap",
+        "required_merged_strokes",
+    }
+    if set(configuration) != expected:
+        raise ValueError("relation merge configuration fields mismatch")
+    maximum_rank = configuration["maximum_candidate_rank"]
+    required_strokes = configuration["required_merged_strokes"]
+    if (
+        isinstance(maximum_rank, bool)
+        or not isinstance(maximum_rank, int)
+        or not 1 <= maximum_rank <= TOP_N
+        or isinstance(required_strokes, bool)
+        or not isinstance(required_strokes, int)
+        or required_strokes < 2
+    ):
+        raise ValueError("invalid relation merge integer configuration")
+    geometry_delta = float(configuration["minimum_geometry_delta"])
+    ranker_probability = float(configuration["minimum_ranker_probability"])
+    box_overlap = float(configuration["minimum_component_box_overlap"])
+    if (
+        not all(math.isfinite(value) for value in (
+            geometry_delta, ranker_probability, box_overlap,
+        ))
+        or geometry_delta > 0.0
+        or not 0.0 <= ranker_probability <= 1.0
+        or not 0.0 <= box_overlap <= 1.0
+    ):
+        raise ValueError("invalid relation merge threshold configuration")
+    return {
+        "maximum_candidate_rank": maximum_rank,
+        "minimum_geometry_delta": geometry_delta,
+        "minimum_ranker_probability": ranker_probability,
+        "minimum_component_box_overlap": box_overlap,
+        "required_merged_strokes": required_strokes,
+    }
 
 
 def _partition_rows(
@@ -300,6 +357,141 @@ def _gated_selection(partitions: list[dict], model, width: int, configuration: d
         baseline = geometry[sample_id]
         output[sample_id] = candidate if _gate_accept(baseline, candidate, configuration) else baseline
     return output
+
+
+def _box_overlap_ratio(left: dict, right: dict) -> float:
+    width = max(0.0, min(float(left["right"]), float(right["right"])) - max(
+        float(left["left"]), float(right["left"]),
+    ))
+    height = max(0.0, min(float(left["bottom"]), float(right["bottom"])) - max(
+        float(left["top"]), float(right["top"]),
+    ))
+    left_area = max(
+        (float(left["right"]) - float(left["left"]))
+        * (float(left["bottom"]) - float(left["top"])),
+        1e-12,
+    )
+    right_area = max(
+        (float(right["right"]) - float(right["left"]))
+        * (float(right["bottom"]) - float(right["top"])),
+        1e-12,
+    )
+    return width * height / min(left_area, right_area)
+
+
+def _relation_merge_selection(
+    partitions: list[dict], selected: dict[str, dict], configuration: dict,
+) -> tuple[dict[str, dict], dict]:
+    configuration = _validate_relation_merge_configuration(configuration)
+    grouped: dict[str, list[dict]] = {}
+    for partition in partitions:
+        grouped.setdefault(partition["sample"].sample_id, []).append(partition)
+    output = dict(selected)
+    changes = []
+    ambiguous = []
+    for sample_id, baseline in selected.items():
+        baseline_groups = [frozenset(group) for group in baseline["groups"]]
+        baseline_rows = {
+            frozenset(row["group"]): row for row in baseline["rows"]
+        }
+        baseline_tokens = {
+            frozenset(row["group"]): str(token)
+            for row, token in zip(baseline["rows"], baseline["tokens"], strict=True)
+        }
+        admitted = []
+        for candidate in grouped[sample_id]:
+            candidate_groups = [frozenset(group) for group in candidate["groups"]]
+            if (
+                candidate["rank"] > configuration["maximum_candidate_rank"]
+                or float(candidate["geometry_delta"])
+                < configuration["minimum_geometry_delta"]
+                or float(candidate.get("ranker_probability", 0.0))
+                < configuration["minimum_ranker_probability"]
+                or len(candidate_groups) != len(baseline_groups) - 1
+            ):
+                continue
+            components = {
+                merged: [group for group in baseline_groups if group.issubset(merged)]
+                for merged in candidate_groups
+            }
+            merged_groups = [
+                (merged, groups) for merged, groups in components.items()
+                if len(groups) > 1
+            ]
+            if (
+                len(merged_groups) != 1
+                or len(merged_groups[0][1]) != 2
+                or any(not groups for groups in components.values())
+            ):
+                continue
+            merged, pair = merged_groups[0]
+            if len(merged) != configuration["required_merged_strokes"]:
+                continue
+            pair_tokens = [baseline_tokens[group] for group in pair]
+            if not (
+                sum(token in BASE_RELATION_TOKENS for token in pair_tokens) == 1
+                and sum(token in SLASH_COMPONENT_TOKENS for token in pair_tokens) == 1
+            ):
+                continue
+            overlap = _box_overlap_ratio(
+                baseline_rows[pair[0]]["geometry"], baseline_rows[pair[1]]["geometry"],
+            )
+            if overlap < configuration["minimum_component_box_overlap"]:
+                continue
+            merged_index = next(
+                index for index, row in enumerate(candidate["rows"])
+                if frozenset(row["group"]) == merged
+            )
+            relation_positions = [
+                index for index, token in enumerate(candidate["tokens"])
+                if token in NEGATED_RELATIONS
+            ]
+            if relation_positions != [merged_index]:
+                continue
+            relation_index = merged_index
+            if (
+                relation_index == 0
+                or relation_index == len(candidate["tokens"]) - 1
+                or _semantic_role(candidate["tokens"][relation_index - 1])
+                not in {"digit", "operand"}
+                or _semantic_role(candidate["tokens"][relation_index + 1])
+                not in {"digit", "operand"}
+            ):
+                continue
+            candidate_row = candidate["rows"][merged_index]
+            relation = str(candidate["tokens"][relation_index])
+            if relation not in candidate_row["final_topk"]:
+                continue
+            admitted.append((candidate, overlap, pair_tokens, relation))
+        if len(admitted) != 1:
+            if len(admitted) > 1:
+                ambiguous.append(sample_id)
+            continue
+        candidate, overlap, pair_tokens, relation = admitted[0]
+        output[sample_id] = candidate
+        changes.append({
+            "formula_id": sample_id,
+            "before_rank": int(baseline["rank"]),
+            "after_rank": int(candidate["rank"]),
+            "before_tokens": list(baseline["tokens"]),
+            "after_tokens": list(candidate["tokens"]),
+            "merged_component_tokens": pair_tokens,
+            "merged_relation": relation,
+            "component_box_overlap": overlap,
+            "geometry_delta": float(candidate["geometry_delta"]),
+            "ranker_probability": float(candidate["ranker_probability"]),
+        })
+    return output, {
+        "enabled": True,
+        "status": "development_only_posthoc_shadow",
+        "configuration": configuration,
+        "changed_formulas": len(changes),
+        "changes": changes,
+        "ambiguous_formulas": ambiguous,
+        "all_strokes_exactly_once": True,
+        "target_label_or_glyph_count_input": False,
+        "arithmetic_evaluation": False,
+    }
 
 
 def _select_gate(train_partitions: list[dict], width: int) -> dict:
@@ -686,6 +878,8 @@ def _score_finalized(
         result.update({
             "dual_numeric_formula_exact_count": numeric_score["exact"],
             "dual_numeric_formula_exact": numeric_score["exact"] / total,
+            "dual_numeric_formula_oracle_count": numeric_score["oracle"],
+            "dual_numeric_formula_oracle": numeric_score["oracle"] / total,
             "dual_numeric_improved": numeric_improved,
             "dual_numeric_regressed": numeric_regressed,
         })
@@ -693,6 +887,8 @@ def _score_finalized(
         result.update({
             "wide_numeric_formula_exact_count": wide_score["exact"],
             "wide_numeric_formula_exact": wide_score["exact"] / total,
+            "wide_numeric_formula_oracle_count": wide_score["oracle"],
+            "wide_numeric_formula_oracle": wide_score["oracle"] / total,
             "wide_numeric_improved": wide_improved,
             "wide_numeric_regressed": wide_regressed,
         })
@@ -986,6 +1182,12 @@ def main() -> int:
     context_design_guard = _gated_selection(
         test_partitions, context_ranker, len(FEATURE_NAMES), POSTHOC_DESIGN_GUARD,
     )
+    relation_merge_configuration = _validate_relation_merge_configuration(
+        RELATION_MERGE_CONFIGURATION,
+    )
+    relation_merge_guard, relation_merge_audit = _relation_merge_selection(
+        test_partitions, context_design_guard, relation_merge_configuration,
+    )
     scores = {
         "geometry_top1": _score(test, geometry_selected, truth_labels),
         "geometry_hwr_ranker": _score(test, hwr_selected, truth_labels),
@@ -994,6 +1196,9 @@ def main() -> int:
         "geometry_hwr_context_ranker_gated": _score(test, context_gated, truth_labels),
         "geometry_hwr_context_ranker_posthoc_design_guard": _score(
             test, context_design_guard, truth_labels,
+        ),
+        "relation_merge_guard": _score(
+            test, relation_merge_guard, truth_labels,
         ),
     }
     finalized_scores = {
@@ -1005,18 +1210,22 @@ def main() -> int:
             test, context_design_guard, truth_labels, finalizer, auxiliary,
             singleton_auxiliary,
         ),
+        "relation_merge_guard": _score_finalized(
+            test, relation_merge_guard, truth_labels, finalizer, auxiliary,
+            singleton_auxiliary,
+        ),
     }
     baseline = scores["geometry_top1"]
-    candidate = scores["geometry_hwr_context_ranker_posthoc_design_guard"]
+    candidate = scores["relation_merge_guard"]
     baseline_ids = {sample.sample_id for sample in test if geometry_selected[sample.sample_id]["truth"]}
-    candidate_ids = {sample.sample_id for sample in test if context_design_guard[sample.sample_id]["truth"]}
+    candidate_ids = {sample.sample_id for sample in test if relation_merge_guard[sample.sample_id]["truth"]}
     comparison = {
         "grouping_improved": sorted(candidate_ids - baseline_ids),
         "grouping_regressed": sorted(baseline_ids - candidate_ids),
         "grouping_exact_delta": candidate["grouping_exact_count"] - baseline["grouping_exact_count"],
         "context_formula_exact_delta": candidate["context_formula_exact_count"] - baseline["context_formula_exact_count"],
         "finalized_formula_exact_delta": (
-            finalized_scores["posthoc_design_guard"]["final_formula_exact_count"]
+            finalized_scores["relation_merge_guard"]["final_formula_exact_count"]
             - finalized_scores["geometry_top1"]["final_formula_exact_count"]
         ),
     }
@@ -1028,6 +1237,7 @@ def main() -> int:
         "feature_names": FEATURE_NAMES, "top_n": TOP_N, "lattice_config": LATTICE_CONFIG,
         "hwr_checkpoint_sha256": _sha256(hwr_path), "context_checkpoint_sha256": _sha256(context_path),
         "selection_guard": POSTHOC_DESIGN_GUARD,
+        "relation_merge_guard": relation_merge_configuration,
         "finalizer_contract": {
             "formula_layout": True,
             "semantic_guards": True,
@@ -1064,6 +1274,7 @@ def main() -> int:
                 "configuration": POSTHOC_DESIGN_GUARD,
                 "status": "development_only_after_inspecting_49_formula_failures",
             },
+            "relation_merge_guard": relation_merge_audit,
         },
         "scores": scores, "finalized_scores": finalized_scores, "comparison": comparison,
         "selection_changes": {
@@ -1071,6 +1282,9 @@ def main() -> int:
             "context_ranker_gated": _selection_changes(geometry_selected, context_gated),
             "context_ranker_posthoc_design_guard": _selection_changes(
                 geometry_selected, context_design_guard,
+            ),
+            "relation_merge_guard": _selection_changes(
+                context_design_guard, relation_merge_guard,
             ),
         },
         "artifact": {"file": model_path.name, "sha256": _sha256(model_path), "feature_names": list(FEATURE_NAMES)},

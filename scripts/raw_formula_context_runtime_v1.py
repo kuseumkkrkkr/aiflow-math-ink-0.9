@@ -35,7 +35,8 @@ from wide_candidate_syntax_rescue_v1 import (
 from evaluate_partition_context_ranker_v1 import (
     FEATURE_NAMES, POSTHOC_DESIGN_GUARD, SCHEMA as RANKER_SCHEMA,
     _attach_features, _auxiliary_rows, _gate_accept, _geometry_selection,
-    _partition_rows, _select,
+    _partition_rows, _relation_merge_selection, _select,
+    _validate_relation_merge_configuration,
 )
 from finalize_formula_context_v1 import DEFAULT_CONTEXT, OwnedFormulaContextFinalizer
 from singleton_shape_rescue_v1 import (
@@ -147,6 +148,7 @@ class RawFormulaContextRuntimeV1:
     singleton_configuration: dict[str, Any] | None
     numeric_configuration: dict[str, Any] | None
     wide_syntax_configuration: dict[str, Any] | None
+    relation_merge_configuration: dict[str, Any] | None
     singleton_config_sha256: str | None
     singleton_hwr_sha256: str | None
 
@@ -229,6 +231,7 @@ class RawFormulaContextRuntimeV1:
         singleton_configuration = None
         numeric_configuration = None
         wide_syntax_configuration = None
+        relation_merge_configuration = None
         singleton_config_sha256 = None
         singleton_hwr_sha256 = None
         if candidate_context_fusion_config is not None:
@@ -250,6 +253,7 @@ class RawFormulaContextRuntimeV1:
             singleton_mode = dict(mode.get("singleton_shape_rescue") or {})
             numeric_mode = dict(mode.get("dual_numeric_rescue") or {})
             wide_syntax_mode = dict(mode.get("wide_numeric_syntax_rescue") or {})
+            relation_merge_mode = dict(mode.get("relation_merge_rescue") or {})
             if (
                 singleton_payload.get("schema") != CANDIDATE_FUSION_CONFIG_SCHEMA
                 or singleton_payload.get("rescue_schema") != SINGLETON_SCHEMA
@@ -280,6 +284,15 @@ class RawFormulaContextRuntimeV1:
                     "candidate_contract": "baseline_and_auxiliary_top10_union",
                     "minimum_digit_probability_ratio": 0.005,
                     "allow_equality_replacement": False,
+                    "arithmetic_evaluation": False,
+                }
+                or relation_merge_mode != {
+                    "enabled": True,
+                    "maximum_candidate_rank": 3,
+                    "exact_cover_coarsening_only": True,
+                    "required_merged_strokes": 3,
+                    "negated_relation_candidate_required": True,
+                    "target_label_or_glyph_count_input": False,
                     "arithmetic_evaluation": False,
                 }
             ):
@@ -313,6 +326,16 @@ class RawFormulaContextRuntimeV1:
             wide_syntax_configuration = validate_wide_syntax_configuration(
                 dict(singleton_payload.get("wide_syntax_configuration") or {}),
             )
+            relation_merge_configuration = _validate_relation_merge_configuration(
+                dict(singleton_payload.get("relation_merge_configuration") or {}),
+            )
+            if (
+                relation_merge_configuration["maximum_candidate_rank"]
+                != relation_merge_mode["maximum_candidate_rank"]
+                or relation_merge_configuration["required_merged_strokes"]
+                != relation_merge_mode["required_merged_strokes"]
+            ):
+                raise ValueError("candidate context relation merge mode mismatch")
             if singleton_configuration["auxiliary_policy"] != "old_new_product_probability_fusion":
                 raise ValueError("candidate context fusion policy mismatch")
             if (
@@ -352,7 +375,7 @@ class RawFormulaContextRuntimeV1:
         return cls(
             payload, hwr, labels, finalizer, resolved_device, _sha256(ranker_path),
             singleton_hwr, singleton_configuration, numeric_configuration,
-            wide_syntax_configuration,
+            wide_syntax_configuration, relation_merge_configuration,
             singleton_config_sha256,
             singleton_hwr_sha256,
         )
@@ -415,6 +438,16 @@ class RawFormulaContextRuntimeV1:
             baseline, proposal, self.ranker_payload["selection_guard"],
         )
         selected = proposal if accepted else baseline
+        relation_merge_audit = {"enabled": False}
+        if self.relation_merge_configuration is not None:
+            relation_selected, relation_merge_audit = _relation_merge_selection(
+                partitions, {sample.sample_id: selected},
+                self.relation_merge_configuration,
+            )
+            selected = relation_selected[sample.sample_id]
+        relation_merge_changed = bool(
+            relation_merge_audit.get("changed_formulas", 0)
+        )
         runtime_rows = [
             {
                 **{
@@ -546,9 +579,17 @@ class RawFormulaContextRuntimeV1:
                 "geometry_baseline_rank": int(baseline["rank"]),
                 "ranker_proposal_rank": int(proposal["rank"]),
                 "selected_partition_rank": int(selected["rank"]),
-                "partition_change_accepted": bool(accepted),
+                "partition_change_accepted": bool(selected["rank"] != baseline["rank"]),
+                "design_gate_partition_change_accepted": bool(accepted),
+                "partition_change_source": (
+                    "relation_merge_rescue" if relation_merge_changed else
+                    "posthoc_design_guard" if accepted else "geometry_baseline"
+                ),
                 "ranker_probability_gain": float(
                     proposal["ranker_probability"] - baseline["ranker_probability"]
+                ),
+                "selected_ranker_probability_gain": float(
+                    selected["ranker_probability"] - baseline["ranker_probability"]
                 ),
                 "all_strokes_exactly_once": True,
                 "target_label_or_glyph_count_input": False,
@@ -559,6 +600,7 @@ class RawFormulaContextRuntimeV1:
                 "context_checkpoint_sha256": self.finalizer.checkpoint_sha256,
                 "candidate_context_fusion": {
                     **singleton_audit,
+                    "relation_merge_rescue": relation_merge_audit,
                     "enabled": self.singleton_hwr is not None,
                     "configuration_sha256": self.singleton_config_sha256,
                     "auxiliary_hwr_checkpoint_sha256": self.singleton_hwr_sha256,

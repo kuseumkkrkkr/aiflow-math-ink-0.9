@@ -1,7 +1,7 @@
 {
   "schema": "aiflow-raw-candidate-context-fusion-runtime-config/v1",
   "rescue_schema": "aiflow-singleton-shape-rescue/v1",
-  "generated_at": "2026-08-19T15:39:23.9167216Z",
+  "generated_at": "2026-08-19T15:56:00.4882221Z",
   "status": "development_only_posthoc_shadow",
   "configuration": {
     "auxiliary_policy": "old_new_product_probability_fusion",
@@ -27,6 +27,13 @@
     "equality_candidate_must_be_top1": true,
     "allow_equality_replacement": false,
     "literal_alpha_operand_lock": true
+  },
+  "relation_merge_configuration": {
+    "maximum_candidate_rank": 3,
+    "minimum_geometry_delta": -5.0,
+    "minimum_ranker_probability": 0.05,
+    "minimum_component_box_overlap": 0.25,
+    "required_merged_strokes": 3
   },
   "mode": {
     "restricted_candidate_rerank": {
@@ -54,6 +61,15 @@
       "minimum_digit_probability_ratio": 0.005,
       "allow_equality_replacement": false,
       "arithmetic_evaluation": false
+    },
+    "relation_merge_rescue": {
+      "enabled": true,
+      "maximum_candidate_rank": 3,
+      "exact_cover_coarsening_only": true,
+      "required_merged_strokes": 3,
+      "negated_relation_candidate_required": true,
+      "target_label_or_glyph_count_input": false,
+      "arithmetic_evaluation": false
     }
   },
   "artifacts": {
@@ -66,14 +82,14 @@
   },
   "evidence": {
     "selected_summary": "selected_summary.json",
-    "selected_summary_sha256": "2ee569d7a86ae6a701f5c38e3d5c808ba320271919453dd60aaf367eaab69d4d",
+    "selected_summary_sha256": "1997f7b070e4f107d537d392708650f6070f1bff773fda7d0c2c58c45f8b7634",
     "evaluation_evidence": "evaluation_evidence.json",
-    "evaluation_evidence_sha256": "5e15ea1d6fdca8584147390945ba3ea317111d8d5433adb698a1d38a79fc1e39",
+    "evaluation_evidence_sha256": "ac8aa126e35de8bbe5284ffd1bc3635b2e479ed4390b95984197d8414ded543b",
     "baseline_formula_exact": {"count": 38, "total": 49},
-    "candidate_context_fusion_formula_exact": {"count": 40, "total": 49},
-    "dual_hwr_numeric_formula_exact": {"count": 41, "total": 49},
-    "wide_numeric_syntax_formula_exact": {"count": 42, "total": 49},
-    "improved_formula_ids": ["aiflow_0049", "aiflow_0052", "aiflow_0058", "aiflow_0078"],
+    "candidate_context_fusion_formula_exact": {"count": 41, "total": 49},
+    "dual_hwr_numeric_formula_exact": {"count": 42, "total": 49},
+    "wide_numeric_syntax_formula_exact": {"count": 43, "total": 49},
+    "improved_formula_ids": ["aiflow_0010", "aiflow_0049", "aiflow_0052", "aiflow_0058", "aiflow_0078"],
     "regressed_formula_ids": []
   },
   "provenance": {
@@ -92,7 +108,10 @@
       "wide_numeric_top10_union_preserved": true,
       "tokens_outside_admitted_union_zero": true,
       "deleted_glyphs_zero": true,
-      "grouping_mutations_zero": true,
+      "relation_merge_exact_cover_coarsening_only": true,
+      "relation_merge_negated_relation_in_merged_top5": true,
+      "relation_merge_target_input_disabled": true,
+      "downstream_grouping_mutations_after_relation_merge_zero": true,
       "dual_numeric_operator_relation_or_fence_mutations_zero": true,
       "wide_numeric_non_digit_replacements_zero": true,
       "layout_mutations_zero": true,
