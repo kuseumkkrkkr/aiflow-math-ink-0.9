@@ -41,7 +41,8 @@ the deployed mathematical output dimension.
 
 - Input: immutable HWR Top-5 candidates, probabilities, formula order, and seven spatial relations.
 - Context encoder: owned 2-layer Transformer, hidden width 128, two attention heads.
-- First pass: role/class context score plus HWR shape score, owned role grammar, and deterministic equation/fence/infix guards.
+- First pass: role/class context score plus HWR shape score, owned role grammar, and deterministic fence/infix guards.
+- Product integrity: arithmetic equality solving is disabled by default. It is an explicit research-only suggestion mode because recognition must preserve intentionally wrong answers.
 - Second pass: re-read the first finalized formula as MASK context.
 - Recheck policy: only retract a first-pass override back to HWR Top-1; never introduce a new candidate choice.
 - Contract: candidate preservation 100%, no token creation, deletion, or stroke regrouping.

@@ -15,7 +15,7 @@ from character_tensor_v1 import _json_lines
 from evaluate_48hz_prefix_v1 import DEFAULT_PRODUCT, _sha256
 from context_recheck_guard_v1 import apply_context_recheck_guard
 from evaluate_homograph_context_reranker_v1 import _metrics
-from semantic_equation_guard_v2 import apply_semantic_equation_guard_v2
+from finalize_formula_context_v1 import _apply_equation_correction
 from semantic_fence_guard_v1 import apply_semantic_fence_guard
 from semantic_infix_guard_v1 import apply_semantic_infix_guard
 import train_masked_context_reranker_v1 as masked
@@ -83,6 +83,10 @@ def main() -> int:
     parser.add_argument("--predictions-output", type=Path)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--batch-size", type=int, default=256)
+    parser.add_argument(
+        "--enable-equation-correction", action="store_true",
+        help="research-only: allow exact arithmetic to override HWR candidates",
+    )
     args = parser.parse_args()
     if args.batch_size < 1:
         parser.error("batch size must be positive")
@@ -115,8 +119,9 @@ def main() -> int:
     probability_ratio_floor = float(
         payload["configuration"]["candidate_probability_ratio_floor"]
     )
-    direct_equation, direct_equation_audit = apply_semantic_equation_guard_v2(
-        direct_rows, direct_context, probability_ratio_floor
+    direct_equation, direct_equation_audit = _apply_equation_correction(
+        direct_rows, direct_context, probability_ratio_floor,
+        args.enable_equation_correction,
     )
     direct_fence, direct_fence_audit = apply_semantic_fence_guard(
         direct_rows, direct_equation
@@ -132,8 +137,9 @@ def main() -> int:
         )
     )
     direct_recheck_equation, direct_recheck_equation_audit = (
-        apply_semantic_equation_guard_v2(
-            direct_rows, direct_recheck_context, probability_ratio_floor
+        _apply_equation_correction(
+            direct_rows, direct_recheck_context, probability_ratio_floor,
+            args.enable_equation_correction,
         )
     )
     direct_recheck_fence, direct_recheck_fence_audit = apply_semantic_fence_guard(
@@ -157,11 +163,12 @@ def main() -> int:
         "runtime_pipeline": [
             "owned_formula_context_r6",
             "owned_supported_exact_context_guard_v1",
-            "semantic_equation_guard_v2",
+        ] + (["semantic_equation_guard_v2"] if args.enable_equation_correction else []) + [
             "semantic_fence_guard_v1",
             "semantic_infix_guard_v1",
             "context_recheck_guard_v1",
         ],
+        "equation_correction_enabled": args.enable_equation_correction,
         "device": str(device),
         "checkpoint": {"path": str(checkpoint), "sha256": _sha256(checkpoint)},
         "hwr_checkpoint_sha256": _sha256(hwr_checkpoint),
@@ -195,8 +202,9 @@ def main() -> int:
         crohme_context, crohme_runtime = decide_owned_formula_rows_supported_exact(
             model, contract, payload, crohme_rows, device, args.batch_size
         )
-        crohme_equation, crohme_equation_audit = apply_semantic_equation_guard_v2(
-            crohme_rows, crohme_context, probability_ratio_floor
+        crohme_equation, crohme_equation_audit = _apply_equation_correction(
+            crohme_rows, crohme_context, probability_ratio_floor,
+            args.enable_equation_correction,
         )
         crohme_fence, crohme_fence_audit = apply_semantic_fence_guard(
             crohme_rows, crohme_equation
@@ -212,8 +220,9 @@ def main() -> int:
             )
         )
         crohme_recheck_equation, crohme_recheck_equation_audit = (
-            apply_semantic_equation_guard_v2(
-                crohme_rows, crohme_recheck_context, probability_ratio_floor
+            _apply_equation_correction(
+                crohme_rows, crohme_recheck_context, probability_ratio_floor,
+                args.enable_equation_correction,
             )
         )
         crohme_recheck_fence, crohme_recheck_fence_audit = (

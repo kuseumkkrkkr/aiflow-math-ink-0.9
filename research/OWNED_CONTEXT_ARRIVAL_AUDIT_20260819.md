@@ -156,11 +156,22 @@ python scripts\finalize_formula_context_v1.py `
   --device cpu
 ```
 
-387글자 전체에서 정답 필드를 제거한 뒤 실행한 결과, r10 최종 평가 예측과 불일치 0건, CPU·GPU 예측 및 결정 출처 불일치 0건, 후보 보존율 100%, 새 token 0, 삭제 0, grouping mutation 0을 확인했다. 지원 기반 가드가 확정한 직접수집 문자는 1개이며, 374글자는 `finalized`, 맥락이 없는 단일 글자 13개는 `ambiguous_no_formula_context`다. CROHME 9,535글자도 coverage·후보 위반·`label` 유입이 모두 0건이다.
+제품 기본값은 산술 등식 정답 보정을 실행하지 않는다. 과거 r10 연구값을 재현하거나 별도 제안 결과를 만들 때만 `--enable-equation-correction`을 명시한다.
+
+387글자 전체에서 정답 필드를 제거하고 과거 r10 옵션을 켜 실행한 결과, r10 최종 평가 예측과 불일치 0건, CPU·GPU 예측 및 결정 출처 불일치 0건, 후보 보존율 100%, 새 token 0, 삭제 0, grouping mutation 0을 확인했다. 지원 기반 가드가 확정한 직접수집 문자는 1개이며, 374글자는 `finalized`, 맥락이 없는 단일 글자 13개는 `ambiguous_no_formula_context`다. CROHME 9,535글자도 coverage·후보 위반·`label` 유입이 모두 0건이다.
+
+## 의도적 오답 보존 경계
+
+기존 산술 등식 가드가 직접수집에서 추가로 맞힌 6글자를 분리 감사했다. 가드를 끄면 Top-1은 88.89%에서 87.34%, 수식 exact는 70.53%에서 64.21%로 내려가지만 CROHME 9,535글자는 한 글자도 달라지지 않았다. 이 6건은 모두 후보 형상이나 MASK 문맥만으로 확정된 것이 아니라 수식이 참이 되도록 강제한 결과다. 따라서 이 수치를 상용 HWR 정확도로 계산하지 않는다.
+
+제품 최종기는 `1+1=3`처럼 사용자가 의도적으로 틀리게 쓴 산술식을 기본 모드에서 그대로 보존한다. `--enable-equation-correction`은 연구·별도 제안 모드이며 `finalized_top1`의 상용 기본 경로에는 사용하지 않는다.
+
+제품 기본 평가 산출물은 로컬 `r6_product_safe_eval_r11.json`이며 SHA-256은 `dc3221167316d8473af5723c4938cc372e9145ab6452abdae664a36a0f0478a2`다. 전체 387글자는 Top-1 87.34%, 수식 exact 64.21%, 신규 176글자는 84.09%, 60.42%다. CROHME는 78.11%, 28.56%로 연구 옵션과 동일하다. 기본 경로의 CPU·GPU 387개 출력, 평가기·제품 최종기 출력 불일치와 후보 이탈, 정답 필드 유입은 모두 0건이다.
 
 ## 승격 조건
 
-- 현재 선택: r6 + 지원 기반 exact-context 가드 v1 + 산술 등식 가드 v2 + 잠금 괄호 가드 + 수평 중위 연산자 가드 + 보수적 2-pass 문맥 재검토 v1
+- 현재 제품 기본 선택: r6 + 지원 기반 exact-context 가드 v1 + 잠금 괄호 가드 + 수평 중위 연산자 가드 + 보수적 2-pass 문맥 재검토 v1
+- 연구 전용 옵션: 산술 등식 가드 v2 (`--enable-equation-correction`)
 - 현재 실행 상태: `opt-in shadow context finalizer`
 - `commercial_context_training_rights_gate_passed=true`
 - `commercial_accuracy_gate_passed=false`

@@ -4,8 +4,10 @@
 The runtime never receives truth labels and never creates a token, deletes a
 glyph, or changes stroke ownership. Load ``OwnedFormulaContextFinalizer`` once
 per process, then call ``finalize`` for each candidate batch. The selected r6
-context model is followed by a support-aware exact-context gate, then equation,
-locked-fence, and horizontal-infix guards.
+context model is followed by a support-aware exact-context gate, then locked-
+fence and horizontal-infix guards. Arithmetic equation correction is research-
+only and must be enabled explicitly because HWR must preserve a user's wrong
+answer rather than silently solve it.
 """
 
 from __future__ import annotations
@@ -111,14 +113,31 @@ def _decision_metadata(
     return context_available, status, source
 
 
+def _apply_equation_correction(
+    rows: list[dict], predictions: dict[str, str], probability_ratio_floor: float,
+    enabled: bool,
+) -> tuple[dict[str, str], dict]:
+    if not enabled:
+        return dict(predictions), {
+            "enabled": False,
+            "policy": "preserve user-authored arithmetic; do not solve equations in HWR",
+        }
+    output, audit = apply_semantic_equation_guard_v2(
+        rows, predictions, probability_ratio_floor
+    )
+    return output, {"enabled": True, **audit}
+
+
 class OwnedFormulaContextFinalizer:
     def __init__(
         self, checkpoint: Path, hwr_checkpoint: Path = DEFAULT_PRODUCT,
         *, device: str = "auto", batch_size: int = 128,
-        semantic_guards: bool = True,
+        semantic_guards: bool = True, equation_correction: bool = False,
     ) -> None:
         if batch_size < 1:
             raise ValueError("batch size must be positive")
+        if equation_correction and not semantic_guards:
+            raise ValueError("equation correction requires semantic guards")
         resolved_device = (
             "cuda" if device == "auto" and torch.cuda.is_available()
             else ("cpu" if device == "auto" else device)
@@ -130,6 +149,7 @@ class OwnedFormulaContextFinalizer:
         self.device = torch.device(resolved_device)
         self.batch_size = batch_size
         self.semantic_guards = semantic_guards
+        self.equation_correction = equation_correction
         self.checkpoint_sha256 = _sha256(checkpoint)
         self.hwr_checkpoint_sha256 = _sha256(hwr_checkpoint)
         self.model, self.contract, self.payload = load_owned_formula_context(
@@ -151,8 +171,9 @@ class OwnedFormulaContextFinalizer:
             probability_ratio_floor = float(
                 self.payload["configuration"]["candidate_probability_ratio_floor"]
             )
-            equation_predictions, equation_audit = apply_semantic_equation_guard_v2(
-                runtime_rows, context_predictions, probability_ratio_floor
+            equation_predictions, equation_audit = _apply_equation_correction(
+                runtime_rows, context_predictions, probability_ratio_floor,
+                self.equation_correction,
             )
             fence_predictions, fence_audit = apply_semantic_fence_guard(
                 runtime_rows, equation_predictions
@@ -169,8 +190,9 @@ class OwnedFormulaContextFinalizer:
                 )
             )
             recheck_equation, recheck_equation_audit = (
-                apply_semantic_equation_guard_v2(
-                    runtime_rows, recheck_context, probability_ratio_floor
+                _apply_equation_correction(
+                    runtime_rows, recheck_context, probability_ratio_floor,
+                    self.equation_correction,
                 )
             )
             recheck_fence, recheck_fence_audit = apply_semantic_fence_guard(
@@ -238,8 +260,10 @@ class OwnedFormulaContextFinalizer:
                 "owned_formula_context_r6",
                 "owned_supported_exact_context_guard_v1",
             ] + (
+                ["semantic_equation_guard_v2"]
+                if self.semantic_guards and self.equation_correction else []
+            ) + (
                 [
-                    "semantic_equation_guard_v2",
                     "semantic_fence_guard_v1",
                     "semantic_infix_guard_v1",
                     "context_recheck_guard_v1",
@@ -255,6 +279,7 @@ class OwnedFormulaContextFinalizer:
             "new_tokens": 0,
             "deleted_glyphs": 0,
             "grouping_mutations": 0,
+            "equation_correction_enabled": self.equation_correction,
             "model": model_audit,
             "semantic_guards": semantic_audit,
         }
@@ -293,6 +318,32 @@ def _self_test() -> None:
     assert _decision_metadata(
         contextual, "x", r"\times", r"\times", r"\times", r"\times", "x"
     ) == (True, "finalized", "context_recheck_guard_v1")
+    equation_rows = [
+        {
+            "record_id": f"e{index}", "formula_id": "wrong-answer",
+            "final_topk": candidates, "final_topk_probabilities": probabilities,
+            "context": {"index": index, "length": 5},
+            "geometry": {
+                "center_x": float(index), "center_y": 0.5,
+                "width_rel": 0.2, "height_rel": 1.0,
+            },
+        }
+        for index, (candidates, probabilities) in enumerate([
+            (["1"], [1.0]), (["+"], [1.0]), (["1"], [1.0]),
+            (["="], [1.0]), (["3", "2"], [0.6, 0.4]),
+        ])
+    ]
+    wrong_answer = {
+        row["record_id"]: row["final_topk"][0] for row in equation_rows
+    }
+    preserved, disabled = _apply_equation_correction(
+        equation_rows, wrong_answer, 0.0, False
+    )
+    corrected, enabled = _apply_equation_correction(
+        equation_rows, wrong_answer, 0.0, True
+    )
+    assert preserved == wrong_answer and disabled["enabled"] is False
+    assert corrected["e4"] == "2" and enabled["enabled"] is True
     try:
         _runtime_rows([{**rows[0], "final_topk": ["1", "x"]}], labels)
     except ValueError:
@@ -310,8 +361,14 @@ def main() -> int:
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--disable-semantic-guards", action="store_true")
+    parser.add_argument(
+        "--enable-equation-correction", action="store_true",
+        help="research-only: allow exact arithmetic to override HWR candidates",
+    )
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
+    if args.enable_equation_correction and args.disable_semantic_guards:
+        parser.error("--enable-equation-correction conflicts with --disable-semantic-guards")
     if args.self_test:
         _self_test()
         print(json.dumps({"self_test": "pass"}))
@@ -326,6 +383,7 @@ def main() -> int:
         args.checkpoint, args.hwr_checkpoint,
         device=args.device, batch_size=args.batch_size,
         semantic_guards=not args.disable_semantic_guards,
+        equation_correction=args.enable_equation_correction,
     )
     finalized, audit = finalizer.finalize(list(_json_lines(input_path)))
     output_path.parent.mkdir(parents=True, exist_ok=True)

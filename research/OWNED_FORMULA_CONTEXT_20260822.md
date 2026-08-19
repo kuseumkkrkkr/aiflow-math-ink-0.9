@@ -82,6 +82,7 @@ HWR 372-head ──> Top-5 문자·확률
 
 - 구현: `scripts/train_owned_formula_context_v1.py`
 - 제품 최종기: `scripts/finalize_formula_context_v1.py`
+- 제품 무결성 기본값: 산술 정답 강제 비활성, 연구 제안에서만 `--enable-equation-correction`
 - 2-pass 복귀 경계: `scripts/context_recheck_guard_v1.py`
 - 고정 체크포인트 평가기: `scripts/evaluate_owned_formula_context_checkpoint_v1.py`
 - 공통 후보 결합·형상 경계: `scripts/train_context_decision_layer_v1.py`
