@@ -121,6 +121,9 @@ CROSS_MERGE_CONFIGURATION = {
     "maximum_absolute_aspect_log": 0.40,
     "required_merged_strokes": 2,
     "preserve_merged_x_after_auxiliary_fusion": True,
+    "auxiliary_nested_expression_enabled": True,
+    "auxiliary_x_candidate_maximum_rank": 3,
+    "auxiliary_open_fence_candidate_maximum_rank": 1,
 }
 REPEAT_MERGE_CONFIGURATION = {
     "maximum_candidate_rank": 3,
@@ -187,14 +190,29 @@ def _validate_relation_merge_configuration(configuration: dict) -> dict:
 
 
 def _validate_cross_merge_configuration(configuration: dict) -> dict:
-    expected = {
+    legacy = {
         "maximum_candidate_rank", "minimum_geometry_delta",
         "maximum_pair_gap_ref", "minimum_y_overlap",
         "maximum_absolute_aspect_log", "required_merged_strokes",
         "preserve_merged_x_after_auxiliary_fusion",
     }
-    if set(configuration) != expected:
+    auxiliary_fields = {
+        "auxiliary_nested_expression_enabled",
+        "auxiliary_x_candidate_maximum_rank",
+        "auxiliary_open_fence_candidate_maximum_rank",
+    }
+    fields = set(configuration)
+    if fields not in (legacy, legacy | auxiliary_fields):
         raise ValueError("cross merge configuration fields mismatch")
+    auxiliary_enabled = configuration.get(
+        "auxiliary_nested_expression_enabled", False,
+    )
+    auxiliary_x_rank = configuration.get(
+        "auxiliary_x_candidate_maximum_rank", 0,
+    )
+    auxiliary_fence_rank = configuration.get(
+        "auxiliary_open_fence_candidate_maximum_rank", 0,
+    )
     maximum_rank = configuration["maximum_candidate_rank"]
     required_strokes = configuration["required_merged_strokes"]
     if (
@@ -203,6 +221,14 @@ def _validate_cross_merge_configuration(configuration: dict) -> dict:
         or not 1 <= maximum_rank <= TOP_N
         or isinstance(required_strokes, bool)
         or required_strokes != 2
+        or type(auxiliary_enabled) is not bool
+        or isinstance(auxiliary_x_rank, bool)
+        or not isinstance(auxiliary_x_rank, int)
+        or isinstance(auxiliary_fence_rank, bool)
+        or not isinstance(auxiliary_fence_rank, int)
+        or (auxiliary_enabled and not 1 <= auxiliary_x_rank <= 20)
+        or (auxiliary_enabled and not 1 <= auxiliary_fence_rank <= 20)
+        or (not auxiliary_enabled and (auxiliary_x_rank or auxiliary_fence_rank))
     ):
         raise ValueError("invalid cross merge integer configuration")
     preserve_token = configuration["preserve_merged_x_after_auxiliary_fusion"]
@@ -227,6 +253,9 @@ def _validate_cross_merge_configuration(configuration: dict) -> dict:
         **values,
         "required_merged_strokes": required_strokes,
         "preserve_merged_x_after_auxiliary_fusion": preserve_token,
+        "auxiliary_nested_expression_enabled": auxiliary_enabled,
+        "auxiliary_x_candidate_maximum_rank": auxiliary_x_rank,
+        "auxiliary_open_fence_candidate_maximum_rank": auxiliary_fence_rank,
     }
 
 
@@ -616,8 +645,111 @@ def _relation_merge_selection(
     }
 
 
+def _valid_nested_flat_expression(tokens: list[str]) -> bool:
+    pairs = {"(": ")", "[": "]", "{": "}", r"\{": r"\}"}
+    closers = set(pairs.values())
+    stack: list[str] = []
+    expect_value = True
+    previous_role = "boundary"
+    for token in tokens:
+        if token in pairs:
+            if not expect_value:
+                return False
+            stack.append(pairs[token])
+            previous_role = "fence"
+            continue
+        if token in closers:
+            if expect_value or not stack or stack.pop() != token:
+                return False
+            previous_role = "fence"
+            continue
+        role = _semantic_role(token)
+        if expect_value:
+            if role not in {"digit", "operand"}:
+                return False
+            expect_value = False
+        elif role == "operator":
+            expect_value = True
+        elif role == "digit" and previous_role == "digit":
+            pass
+        else:
+            return False
+        previous_role = role
+    return not expect_value and not stack
+
+
+def _auxiliary_nested_cross_evidence(
+    candidate: dict, merged_index: int, auxiliary: dict, configuration: dict,
+) -> dict | None:
+    if not configuration["auxiliary_nested_expression_enabled"]:
+        return None
+    placement = dict(auxiliary.get("placement_configuration") or {})
+    role_configuration = dict(placement.get("formula_role_typo") or {})
+    if not role_configuration or not role_configuration.get(
+        "value_cross_plus_open_fence_enabled", False,
+    ):
+        return None
+    sample = candidate["sample"]
+    rows = _auxiliary_rows(
+        [sample], {sample.sample_id: candidate}, auxiliary["probability"],
+        auxiliary["slices"], auxiliary["labels"], width=20,
+        policy=auxiliary["policy"], weight=auxiliary["weight"],
+    )
+    if len(rows) != len(candidate["rows"]):
+        raise AssertionError("auxiliary cross merge row coverage mismatch")
+    plus_index = merged_index + 1
+    open_index = plus_index + 1
+    if open_index >= len(rows):
+        return None
+    tokens = [str(value) for value in candidate["tokens"]]
+    merged_tokens = [str(value) for value in rows[merged_index]["final_topk"]]
+    plus_tokens = [str(value) for value in rows[plus_index]["final_topk"]]
+    open_tokens = [str(value) for value in rows[open_index]["final_topk"]]
+    if (
+        merged_index != 1
+        or tokens[0] != "("
+        or tokens[-2:] != [")", ")"]
+        or tokens[merged_index] != "x"
+        or "x" not in merged_tokens[
+            :configuration["auxiliary_x_candidate_maximum_rank"]
+        ]
+        or "+" not in plus_tokens[
+            :int(role_configuration["cross_plus_candidate_maximum_rank"])
+        ]
+        or "(" not in open_tokens[
+            :configuration["auxiliary_open_fence_candidate_maximum_rank"]
+        ]
+    ):
+        return None
+    geometry = rows[plus_index]["geometry"]
+    if (
+        int(round(float(geometry["stroke_count"])))
+        != int(role_configuration["cross_plus_required_stroke_count"])
+        or abs(float(geometry["aspect_log"]))
+        > float(role_configuration["cross_plus_maximum_absolute_aspect_log"])
+        or not float(role_configuration["cross_plus_minimum_path_over_diagonal"])
+        <= float(geometry["path_over_diag"])
+        <= float(role_configuration["cross_plus_maximum_path_over_diagonal"])
+    ):
+        return None
+    proposed = list(tokens)
+    proposed[merged_index] = "x"
+    proposed[plus_index] = "+"
+    proposed[open_index] = "("
+    if proposed.count("(") < 2 or not _valid_nested_flat_expression(proposed):
+        return None
+    return {
+        "policy": "product_fused_nested_expression",
+        "proposed_tokens": proposed,
+        "x_candidate_rank": merged_tokens.index("x") + 1,
+        "plus_candidate_rank": plus_tokens.index("+") + 1,
+        "open_fence_candidate_rank": open_tokens.index("(") + 1,
+    }
+
+
 def _cross_merge_selection(
     partitions: list[dict], selected: dict[str, dict], configuration: dict,
+    auxiliary: dict | None = None,
 ) -> tuple[dict[str, dict], dict]:
     configuration = _validate_cross_merge_configuration(configuration)
     grouped: dict[str, list[dict]] = {}
@@ -669,9 +801,7 @@ def _cross_merge_selection(
             candidate_row = candidate["rows"][merged_index]
             features = candidate_row["grouping_features"]
             if (
-                str(candidate["tokens"][merged_index]) != "x"
-                or str(candidate_row["final_topk"][0]) != "x"
-                or float(features["temporal_contiguous"]) != 1.0
+                float(features["temporal_contiguous"]) != 1.0
                 or float(features["pair_gap_max_ref"])
                 > configuration["maximum_pair_gap_ref"]
                 or float(features["y_overlap_mean"])
@@ -680,12 +810,27 @@ def _cross_merge_selection(
                 > configuration["maximum_absolute_aspect_log"]
             ):
                 continue
-            admitted.append((candidate, pair, features))
+            standard = (
+                str(candidate["tokens"][merged_index]) == "x"
+                and str(candidate_row["final_topk"][0]) == "x"
+            )
+            auxiliary_evidence = None
+            if not standard and auxiliary is not None:
+                auxiliary_evidence = _auxiliary_nested_cross_evidence(
+                    candidate, merged_index, auxiliary, configuration,
+                )
+            if not standard and auxiliary_evidence is None:
+                continue
+            admitted.append((
+                candidate, pair, features,
+                "main_hwr_context_x" if standard else "auxiliary_nested_expression",
+                auxiliary_evidence,
+            ))
         if len(admitted) != 1:
             if len(admitted) > 1:
                 ambiguous.append(sample_id)
             continue
-        candidate, pair, features = admitted[0]
+        candidate, pair, features, admission_rule, auxiliary_evidence = admitted[0]
         merged = next(group for group, groups in (
             (
                 group,
@@ -721,6 +866,8 @@ def _cross_merge_selection(
             "pair_gap_max_ref": float(features["pair_gap_max_ref"]),
             "y_overlap_mean": float(features["y_overlap_mean"]),
             "aspect_log": float(features["aspect_log"]),
+            "admission_rule": admission_rule,
+            "auxiliary_evidence": auxiliary_evidence,
         })
     return output, {
         "enabled": True,
@@ -1726,6 +1873,7 @@ def main() -> int:
     )
     cross_merge_guard, cross_merge_audit = _cross_merge_selection(
         test_partitions, relation_merge_guard, cross_merge_configuration,
+        auxiliary,
     )
     repeat_merge_configuration = _validate_repeat_merge_configuration(
         REPEAT_MERGE_CONFIGURATION,

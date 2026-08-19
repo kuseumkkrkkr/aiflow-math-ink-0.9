@@ -83,16 +83,26 @@ def main() -> int:
         raise ValueError("repeat merge configuration is not enabled")
     if runtime.latin_configuration is None:
         raise ValueError("Latin t context configuration is not enabled")
-    baseline_equality = deepcopy(runtime.equality_configuration)
-    baseline_equality["single_glyph_component_pair"]["enabled"] = False
+    if not runtime.cross_merge_configuration.get(
+        "auxiliary_nested_expression_enabled", False,
+    ):
+        raise ValueError("nested-expression cross merge is not enabled")
+    if not runtime.placement_configuration["formula_role_typo"].get(
+        "value_cross_plus_open_fence_enabled", False,
+    ):
+        raise ValueError("open-fence plus rescue is not enabled")
+    baseline_cross = deepcopy(runtime.cross_merge_configuration)
+    baseline_cross["auxiliary_nested_expression_enabled"] = False
+    baseline_cross["auxiliary_x_candidate_maximum_rank"] = 0
+    baseline_cross["auxiliary_open_fence_candidate_maximum_rank"] = 0
+    baseline_placement = deepcopy(runtime.placement_configuration)
+    baseline_placement["formula_role_typo"][
+        "value_cross_plus_open_fence_enabled"
+    ] = False
     baseline_runtime = replace(
         runtime,
-        repeat_merge_configuration=None,
-        equality_configuration=baseline_equality,
-        latin_hwr=None,
-        latin_labels=None,
-        latin_configuration=None,
-        latin_hwr_sha256=None,
+        cross_merge_configuration=baseline_cross,
+        placement_configuration=baseline_placement,
     )
     protocol, duplicates = load_crohme(crohme)
     labels = set(runtime.labels)
@@ -126,6 +136,8 @@ def main() -> int:
     repeat_changed_ids = []
     single_equality_changed_ids = []
     latin_t_changed_ids = []
+    nested_cross_changed_ids = []
+    open_fence_plus_changed_ids = []
     for formula_id, sample, _truth_tokens in eligible:
         result = runtime.infer(_source(formula_id, sample))
         candidate_results[formula_id] = result
@@ -140,10 +152,22 @@ def main() -> int:
             single_equality_changed_ids.append(formula_id)
         if fusion_audit["latin_t_context_rescue"].get("changed_formulas", 0):
             latin_t_changed_ids.append(formula_id)
+        if any(
+            change.get("admission_rule") == "auxiliary_nested_expression"
+            for change in fusion_audit["cross_merge_rescue"].get("changes", [])
+        ):
+            nested_cross_changed_ids.append(formula_id)
+        role_changes = fusion_audit["formula_placement_rescue"].get(
+            "stage_audits", {},
+        ).get("formula_role_typo", {}).get("changes", [])
+        if any(
+            change.get("rule") == "value_cross_plus_open_fence"
+            for change in role_changes
+        ):
+            open_fence_plus_changed_ids.append(formula_id)
         if (
-            formula_id in repeat_changed_ids
-            or formula_id in single_equality_changed_ids
-            or formula_id in latin_t_changed_ids
+            formula_id in nested_cross_changed_ids
+            or formula_id in open_fence_plus_changed_ids
         ):
             changed_ids.append(formula_id)
     baseline_results = {
@@ -189,6 +213,12 @@ def main() -> int:
                 "latin_t_context_audit": candidate["audit"]["candidate_context_fusion"][
                     "latin_t_context_rescue"
                 ],
+                "cross_merge_audit": candidate["audit"]["candidate_context_fusion"][
+                    "cross_merge_rescue"
+                ],
+                "formula_placement_audit": candidate["audit"][
+                    "candidate_context_fusion"
+                ]["formula_placement_rescue"],
             })
     report = {
         "schema": SCHEMA,
@@ -224,6 +254,14 @@ def main() -> int:
         "latin_t_context": {
             "changed_formulas": len(latin_t_changed_ids),
             "changed_formula_ids": sorted(latin_t_changed_ids),
+        },
+        "nested_expression_cross_merge": {
+            "changed_formulas": len(nested_cross_changed_ids),
+            "changed_formula_ids": sorted(nested_cross_changed_ids),
+        },
+        "open_fence_plus_rescue": {
+            "changed_formulas": len(open_fence_plus_changed_ids),
+            "changed_formula_ids": sorted(open_fence_plus_changed_ids),
         },
         "current_loop": {
             "changed_formulas": len(changed_ids),
@@ -265,6 +303,8 @@ def main() -> int:
         "repeat_merge_changed": len(repeat_changed_ids),
         "single_glyph_equality_changed": len(single_equality_changed_ids),
         "latin_t_context_changed": len(latin_t_changed_ids),
+        "nested_expression_cross_merge_changed": len(nested_cross_changed_ids),
+        "open_fence_plus_rescue_changed": len(open_fence_plus_changed_ids),
     }, ensure_ascii=False))
     return 0
 

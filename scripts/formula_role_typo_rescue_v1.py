@@ -40,12 +40,22 @@ DEFAULT_CONFIGURATION = {
     "vertical_one_maximum_relative_width": 0.25,
     "digit_before_binary_top1_only": True,
     "function_rhs_top1_only": True,
+    "value_cross_plus_open_fence_enabled": True,
 }
 
 
 def validate_configuration(configuration: dict) -> dict:
-    if set(configuration) != set(DEFAULT_CONFIGURATION):
+    fields = set(configuration)
+    current_fields = set(DEFAULT_CONFIGURATION)
+    legacy_fields = current_fields - {"value_cross_plus_open_fence_enabled"}
+    if fields not in (legacy_fields, current_fields):
         raise ValueError("formula-role typo configuration fields mismatch")
+    configuration = {
+        **configuration,
+        "value_cross_plus_open_fence_enabled": (
+            configuration.get("value_cross_plus_open_fence_enabled", False)
+        ),
+    }
     output = {
         **configuration,
         "candidate_width": int(configuration["candidate_width"]),
@@ -148,6 +158,7 @@ def validate_configuration(configuration: dict) -> dict:
         or configuration["digit_before_binary_top1_only"] is not True
         or type(configuration["function_rhs_top1_only"]) is not bool
         or configuration["function_rhs_top1_only"] is not True
+        or type(configuration["value_cross_plus_open_fence_enabled"]) is not bool
     ):
         raise ValueError("formula-role typo Top-1 contract is invalid")
     return output
@@ -242,6 +253,7 @@ def apply_formula_role_typo_rescue(
     value_tokens = set(DIGITS) | ascii_letters | {
         ")", "]", "}", r"\}",
     }
+    open_fences = {"(", "[", "{", r"\{"}
 
     def replace(row: dict, token: str, rule: str) -> None:
         record_id = str(row["record_id"])
@@ -387,6 +399,22 @@ def apply_formula_role_typo_rescue(
                 replace(row, "+", "value_cross_plus_value")
                 tokens[index] = "+"
 
+        if configuration["value_cross_plus_open_fence_enabled"]:
+            for index in range(1, len(sequence) - 1):
+                row = sequence[index]
+                candidate = candidates[str(row["record_id"])]
+                if (
+                    tokens[index] not in BINARY
+                    and tokens[index - 1] in value_tokens
+                    and tokens[index + 1] in open_fences
+                    and "+" in candidate["tokens"][
+                        :configuration["cross_plus_candidate_maximum_rank"]
+                    ]
+                    and _cross_passes(candidate, configuration)
+                ):
+                    replace(row, "+", "value_cross_plus_open_fence")
+                    tokens[index] = "+"
+
         if any(
             str(row["formula_id"]) != formula_id for row in sequence
         ):
@@ -445,6 +473,7 @@ def _self_test() -> None:
     formulas = {
         "nested": [r"\fint", "(", "9", "(", r"\between", ")", ")"],
         "paired": ["(", "x", r"\Psi", r"\prime", ")", r"\times", "2"],
+        "nested-plus": ["(", "x", "4", "(", "y", ")", ")"],
     }
     baseline = []
     candidates = []
@@ -454,6 +483,7 @@ def _self_test() -> None:
         ("nested", 4): ["x"],
         ("paired", 2): ["+"],
         ("paired", 3): ["1"],
+        ("nested-plus", 2): ["+"],
     }
     for formula_id, tokens in formulas.items():
         for index, token in enumerate(tokens):
@@ -476,7 +506,9 @@ def _self_test() -> None:
                 "hwr_policy": "old_new_product_probability_fusion",
                 "hwr_fusion_weight": 0.6,
                 "geometry": {
-                    "stroke_count": 2.0 if (formula_id, index) == ("paired", 2) else 1.0,
+                    "stroke_count": 2.0 if (formula_id, index) in {
+                        ("paired", 2), ("nested-plus", 2),
+                    } else 1.0,
                     "aspect_log": -1.8 if (formula_id, index) == ("paired", 3) else 0.0,
                     "path_over_diag": 1.02 if (formula_id, index) == ("paired", 3) else 1.5,
                     "direction_y": 0.98 if (formula_id, index) == ("paired", 3) else 0.0,
@@ -491,7 +523,20 @@ def _self_test() -> None:
     assert [row["finalized_top1"] for row in by_formula["paired"]] == [
         "(", "x", "+", "1", ")", r"\times", "2",
     ]
-    assert audit["changed_glyphs"] == 5
+    assert [row["finalized_top1"] for row in by_formula["nested-plus"]] == [
+        "(", "x", "+", "(", "y", ")", ")",
+    ]
+    legacy_configuration = {
+        key: value for key, value in DEFAULT_CONFIGURATION.items()
+        if key != "value_cross_plus_open_fence_enabled"
+    }
+    legacy_output, _ = apply_formula_role_typo_rescue(
+        baseline, candidates, legacy_configuration,
+    )
+    assert [
+        row["finalized_top1"] for row in _formulae(legacy_output)["nested-plus"]
+    ] == ["(", "x", "4", "(", "y", ")", ")"]
+    assert audit["changed_glyphs"] == 6
     assert audit["candidate_preservation_rate"] == 1.0
     assert audit["arithmetic_evaluation"] is False
 

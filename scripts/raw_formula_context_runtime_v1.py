@@ -352,7 +352,7 @@ class RawFormulaContextRuntimeV1:
                 cross_merge_configuration = _validate_cross_merge_configuration(
                     dict(cross_payload),
                 )
-                if cross_merge_mode != {
+                legacy_cross_mode = {
                     "enabled": True,
                     "maximum_candidate_rank": 3,
                     "exact_cover_coarsening_only": True,
@@ -361,7 +361,18 @@ class RawFormulaContextRuntimeV1:
                     "preserve_merged_x_after_auxiliary_fusion": True,
                     "target_label_or_glyph_count_input": False,
                     "arithmetic_evaluation": False,
-                }:
+                }
+                extended_cross_mode = {
+                    **legacy_cross_mode,
+                    "auxiliary_nested_expression_enabled": True,
+                    "auxiliary_candidate_contract": "product_fused_top20",
+                    "auxiliary_x_candidate_maximum_rank": 3,
+                    "auxiliary_open_fence_candidate_maximum_rank": 1,
+                    "auxiliary_plus_geometry_source": "formula_role_typo",
+                }
+                if cross_merge_mode not in (
+                    legacy_cross_mode, extended_cross_mode,
+                ):
                     raise ValueError("candidate context cross merge mode mismatch")
                 if (
                     cross_merge_configuration["maximum_candidate_rank"]
@@ -371,6 +382,24 @@ class RawFormulaContextRuntimeV1:
                     or cross_merge_configuration[
                         "preserve_merged_x_after_auxiliary_fusion"
                     ] is not True
+                    or cross_merge_configuration[
+                        "auxiliary_nested_expression_enabled"
+                    ] != (cross_merge_mode == extended_cross_mode)
+                    or (
+                        cross_merge_mode == extended_cross_mode
+                        and (
+                            cross_merge_configuration[
+                                "auxiliary_x_candidate_maximum_rank"
+                            ] != cross_merge_mode[
+                                "auxiliary_x_candidate_maximum_rank"
+                            ]
+                            or cross_merge_configuration[
+                                "auxiliary_open_fence_candidate_maximum_rank"
+                            ] != cross_merge_mode[
+                                "auxiliary_open_fence_candidate_maximum_rank"
+                            ]
+                        )
+                    )
                 ):
                     raise ValueError("candidate context cross merge configuration mismatch")
             repeat_payload = singleton_payload.get("repeat_merge_configuration")
@@ -432,6 +461,18 @@ class RawFormulaContextRuntimeV1:
                 equality_configuration = validate_equality_configuration(
                     equality_raw,
                 )
+                if (
+                    cross_merge_configuration is not None
+                    and cross_merge_configuration[
+                        "auxiliary_nested_expression_enabled"
+                    ]
+                    and placement_configuration["formula_role_typo"][
+                        "value_cross_plus_open_fence_enabled"
+                    ] is not True
+                ):
+                    raise ValueError(
+                        "nested cross merge requires open-fence plus placement"
+                    )
                 if placement_mode != {
                     "enabled": True,
                     "candidate_width": 20,
@@ -592,6 +633,15 @@ class RawFormulaContextRuntimeV1:
         sample = self._sample(source)
         embeddings, slices = _candidate_embeddings([sample], self.hwr, self.device)
         probabilities = _probabilities(self.hwr.math_head, embeddings, self.device)
+        fused_probability = None
+        if self.singleton_hwr is not None:
+            auxiliary_probability = _probabilities(
+                self.singleton_hwr.math_head, embeddings, self.device,
+            )
+            weight = float(self.singleton_configuration["auxiliary_weight"])
+            fused_probability = (
+                (1.0 - weight) * probabilities + weight * auxiliary_probability
+            )
         local_probability = probabilities[slices[sample.sample_id]]
         grouping_probability = self.ranker_payload["grouping_model"].predict_proba(
             sample.features
@@ -649,9 +699,22 @@ class RawFormulaContextRuntimeV1:
         )
         cross_merge_audit = {"enabled": False}
         if self.cross_merge_configuration is not None:
+            cross_auxiliary = None
+            if fused_probability is not None and self.placement_configuration is not None:
+                cross_auxiliary = {
+                    "probability": fused_probability,
+                    "slices": slices,
+                    "labels": self.labels,
+                    "policy": self.singleton_configuration["auxiliary_policy"],
+                    "weight": float(
+                        self.singleton_configuration["auxiliary_weight"]
+                    ),
+                    "placement_configuration": self.placement_configuration,
+                }
             cross_selected, cross_merge_audit = _cross_merge_selection(
                 partitions, {sample.sample_id: selected},
                 self.cross_merge_configuration,
+                cross_auxiliary,
             )
             selected = cross_selected[sample.sample_id]
         cross_merge_changed = bool(cross_merge_audit.get("changed_formulas", 0))
@@ -677,13 +740,9 @@ class RawFormulaContextRuntimeV1:
         ]
         singleton_audit = {"enabled": False}
         if self.singleton_hwr is not None:
-            auxiliary_probability = _probabilities(
-                self.singleton_hwr.math_head, embeddings, self.device,
-            )
+            if fused_probability is None:
+                raise AssertionError("singleton fusion probability is missing")
             weight = float(self.singleton_configuration["auxiliary_weight"])
-            fused_probability = (
-                (1.0 - weight) * probabilities + weight * auxiliary_probability
-            )
             restricted_rows = _auxiliary_rows(
                 [sample], {sample.sample_id: selected}, fused_probability, slices,
                 self.labels, width=5,
