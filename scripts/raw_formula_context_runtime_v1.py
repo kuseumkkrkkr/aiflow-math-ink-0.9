@@ -302,6 +302,14 @@ class RawFormulaContextRuntimeV1:
             placement_mode = dict(mode.get("formula_placement_rescue") or {})
             equality_mode = dict(mode.get("straight_equality_rescue") or {})
             latin_mode = dict(mode.get("latin_t_context_rescue") or {})
+            legacy_singleton_mode = {
+                "enabled": True,
+                "preserve_original_candidate_set": True,
+            }
+            ranked_singleton_mode = {
+                **legacy_singleton_mode,
+                "token_candidate_maximum_ranks": {"/": 1, r"\times": 2},
+            }
             if (
                 singleton_payload.get("schema") != CANDIDATE_FUSION_CONFIG_SCHEMA
                 or singleton_payload.get("rescue_schema") != SINGLETON_SCHEMA
@@ -314,10 +322,9 @@ class RawFormulaContextRuntimeV1:
                     "preserve_original_candidate_set": True,
                     "reapply_formula_context_finalizer": True,
                 }
-                or singleton_mode != {
-                    "enabled": True,
-                    "preserve_original_candidate_set": True,
-                }
+                or singleton_mode not in (
+                    legacy_singleton_mode, ranked_singleton_mode,
+                )
                 or numeric_mode != {
                     "enabled": True,
                     "maximum_operand_changes": 2,
@@ -549,6 +556,14 @@ class RawFormulaContextRuntimeV1:
             singleton_configuration = validate_singleton_configuration(
                 dict(singleton_payload.get("configuration") or {}),
             )
+            expected_singleton_ranks = singleton_mode.get(
+                "token_candidate_maximum_ranks", {"/": 1, r"\times": 1},
+            )
+            if (
+                singleton_configuration["token_candidate_maximum_ranks"]
+                != expected_singleton_ranks
+            ):
+                raise ValueError("candidate context singleton rank mode mismatch")
             numeric_configuration = validate_dual_numeric_configuration(
                 dict(singleton_payload.get("numeric_configuration") or {}),
             )

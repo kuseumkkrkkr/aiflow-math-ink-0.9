@@ -59,6 +59,8 @@ def _external_holdout(
         ):
             raise ValueError(f"singleton rescue product encoders differ: {name}")
     thresholds = DEFAULT_CONFIGURATION["token_confidence_thresholds"]
+    maximum_ranks = DEFAULT_CONFIGURATION["token_candidate_maximum_ranks"]
+    maximum_rank = max(maximum_ranks.values())
     weight = float(DEFAULT_CONFIGURATION["auxiliary_weight"])
     baseline_correct = challenger_correct = improved = regressed = changed = 0
     selected_truth = Counter()
@@ -74,21 +76,42 @@ def _external_holdout(
             auxiliary = (
                 (1.0 - weight) * old_probabilities + weight * new_probabilities
             )
-            confidence, auxiliary_top1 = auxiliary.max(dim=1)
+            confidences, auxiliary_topk = auxiliary.topk(maximum_rank, dim=1)
             old_top5 = old_probabilities.topk(5, dim=1).indices
             baseline = old_top5[:, 0]
             expected = torch.from_numpy(
                 np.asarray(truth[take], dtype=np.int64)
             ).to(device)
             challenger = baseline.clone()
-            for index, token_index in enumerate(auxiliary_top1.tolist()):
-                token = labels[token_index]
-                threshold = thresholds.get(token)
-                if threshold is None or float(confidence[index]) < float(threshold):
+            for index, (candidate_indices, candidate_confidences) in enumerate(zip(
+                auxiliary_topk.tolist(), confidences.tolist(),
+            )):
+                ranked = []
+                for rank, (token_index, confidence) in enumerate(
+                    zip(candidate_indices, candidate_confidences), start=1,
+                ):
+                    token = labels[token_index]
+                    threshold = thresholds.get(token)
+                    if (
+                        threshold is None or rank > maximum_ranks[token]
+                        or float(confidence) < float(threshold)
+                    ):
+                        continue
+                    ranked.append((token_index, token, float(confidence), rank))
+                if not ranked:
                     continue
-                if token_index not in old_top5[index].tolist():
-                    candidate_violations += 1
+                original_top5 = old_top5[index].tolist()
+                preserved = []
+                for item in ranked:
+                    if item[0] not in original_top5:
+                        candidate_violations += 1
+                    else:
+                        preserved.append(item)
+                if not preserved:
                     continue
+                token_index, token, _, _ = max(
+                    preserved, key=lambda item: (item[2], -item[3], item[1]),
+                )
                 challenger[index] = token_index
                 selected_truth[labels[int(expected[index])]] += 1
                 selected_prediction[token] += 1

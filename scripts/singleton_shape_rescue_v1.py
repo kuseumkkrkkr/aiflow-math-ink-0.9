@@ -13,12 +13,16 @@ SCHEMA = "aiflow-singleton-shape-rescue/v1"
 DEFAULT_CONFIGURATION = {
     "auxiliary_policy": "current_expanded_writer_loo_probability_fusion",
     "auxiliary_weight": 0.6,
-    "token_confidence_thresholds": {"/": 0.50, r"\times": 0.45},
+    "token_confidence_thresholds": {"/": 0.50, r"\times": 0.40},
+    "token_candidate_maximum_ranks": {"/": 1, r"\times": 2},
 }
 
 
 def validate_configuration(configuration: dict) -> dict:
-    if set(configuration) != set(DEFAULT_CONFIGURATION):
+    fields = set(configuration)
+    current_fields = set(DEFAULT_CONFIGURATION)
+    legacy_fields = current_fields - {"token_candidate_maximum_ranks"}
+    if fields not in (legacy_fields, current_fields):
         raise ValueError("singleton shape rescue configuration fields mismatch")
     policy = str(configuration["auxiliary_policy"])
     if not policy:
@@ -35,10 +39,21 @@ def validate_configuration(configuration: dict) -> dict:
         if not math.isfinite(value) or not 0.0 <= value <= 1.0:
             raise ValueError(f"invalid singleton shape threshold: {token}")
         clean_thresholds[str(token)] = value
+    ranks = configuration.get(
+        "token_candidate_maximum_ranks", {"/": 1, r"\times": 1},
+    )
+    if not isinstance(ranks, dict) or set(ranks) != {"/", r"\times"}:
+        raise ValueError("singleton shape rescue token ranks mismatch")
+    clean_ranks = {}
+    for token, raw in ranks.items():
+        if isinstance(raw, bool) or not isinstance(raw, int) or not 1 <= raw <= 5:
+            raise ValueError(f"invalid singleton shape candidate rank: {token}")
+        clean_ranks[str(token)] = raw
     return {
         "auxiliary_policy": policy,
         "auxiliary_weight": weight,
         "token_confidence_thresholds": clean_thresholds,
+        "token_candidate_maximum_ranks": clean_ranks,
     }
 
 
@@ -57,14 +72,15 @@ def _evidence_by_record(rows: list[dict], configuration: dict) -> dict[str, dict
         probabilities = [float(value) for value in row.get("final_topk_probabilities", [])]
         if (
             not candidates or len(candidates) != len(probabilities)
+            or len(candidates) != len(set(candidates))
             or not all(math.isfinite(value) and 0.0 <= value <= 1.0 for value in probabilities)
             or any(left < right for left, right in zip(probabilities, probabilities[1:]))
         ):
             raise ValueError(f"singleton shape evidence candidates are invalid: {record_id}")
         output[record_id] = {
             "formula_id": str(row.get("formula_id", "")),
-            "token": candidates[0],
-            "confidence": probabilities[0],
+            "tokens": candidates,
+            "probabilities": probabilities,
         }
     return output
 
@@ -85,6 +101,7 @@ def apply_singleton_shape_rescue(
     changes = []
     skipped = Counter()
     thresholds = configuration["token_confidence_thresholds"]
+    maximum_ranks = configuration["token_candidate_maximum_ranks"]
     for formula_id, sequence in masked._formulae(rows).items():
         if len(sequence) != 1:
             skipped["context_available"] += 1
@@ -94,17 +111,28 @@ def apply_singleton_shape_rescue(
         item = evidence[record_id]
         if item["formula_id"] != str(formula_id):
             raise ValueError(f"singleton shape evidence formula mismatch: {record_id}")
-        token = str(item["token"])
-        threshold = thresholds.get(token)
-        if threshold is None:
+        ranked = []
+        for token, threshold in thresholds.items():
+            candidates = item["tokens"][:maximum_ranks[token]]
+            if token not in candidates:
+                continue
+            rank = item["tokens"].index(token) + 1
+            confidence = float(item["probabilities"][rank - 1])
+            ranked.append((token, confidence, rank, float(threshold)))
+        if not ranked:
             skipped["token_not_admitted"] += 1
             continue
-        if float(item["confidence"]) < threshold:
+        confident = [item for item in ranked if item[1] >= item[3]]
+        if not confident:
             skipped["below_confidence_threshold"] += 1
             continue
-        if token not in row["final_topk"]:
+        preserved = [item for item in confident if item[0] in row["final_topk"]]
+        if not preserved:
             skipped["outside_original_top5"] += 1
             continue
+        token, confidence, rank, threshold = max(
+            preserved, key=lambda item: (item[1], -item[2], item[0]),
+        )
         before = output[record_id]
         if before == token:
             skipped["already_selected"] += 1
@@ -115,7 +143,8 @@ def apply_singleton_shape_rescue(
             "record_id": record_id,
             "before": before,
             "after": token,
-            "auxiliary_confidence": float(item["confidence"]),
+            "auxiliary_confidence": confidence,
+            "auxiliary_candidate_rank": rank,
             "threshold": float(threshold),
         })
     if any(output[str(row["record_id"])] not in row["final_topk"] for row in rows):
@@ -152,6 +181,26 @@ def _self_test() -> None:
     evidence[0]["final_topk_probabilities"] = [0.49, 0.48]
     preserved, _ = apply_singleton_shape_rescue(rows, {"r": "1"}, evidence)
     assert preserved == {"r": "1"}
+    times_rows = [{
+        **rows[0], "final_topk": ["x", r"\times"],
+    }]
+    times_evidence = [{
+        **evidence[0], "final_topk": ["X", r"\times"],
+        "final_topk_probabilities": [0.44, 0.41],
+    }]
+    rescued, audit = apply_singleton_shape_rescue(
+        times_rows, {"r": "x"}, times_evidence,
+    )
+    assert rescued == {"r": r"\times"}
+    assert audit["changes"][0]["auxiliary_candidate_rank"] == 2
+    legacy_configuration = {
+        key: value for key, value in DEFAULT_CONFIGURATION.items()
+        if key != "token_candidate_maximum_ranks"
+    }
+    preserved, _ = apply_singleton_shape_rescue(
+        times_rows, {"r": "x"}, times_evidence, legacy_configuration,
+    )
+    assert preserved == {"r": "x"}
 
 
 if __name__ == "__main__":

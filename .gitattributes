@@ -2,12 +2,14 @@
 *.jsonl binary
 artifacts/raw_candidate_context_fusion_20260819_r1_shadow/*.json binary
 artifacts/raw_candidate_context_fusion_20260820_r2_nested_expression_shadow/*.json binary
+artifacts/raw_candidate_context_fusion_20260820_r3_ranked_singleton_shadow/*.json binary
 artifacts/formula_placement_rescue_20260819_r1_shadow/*.json text eol=lf
 artifacts/formula_placement_rescue_20260820_r2_nested_expression_shadow/*.json text eol=lf
 artifacts/straight_equality_slot_rescue_20260819_r1_shadow/*.json text eol=lf
 artifacts/partition_context_ranker_20260820_r36_latin_t_guarded/*.json text eol=lf
 scripts/formula_placement_rescue_v1.py text eol=lf
 scripts/formula_role_typo_rescue_v1.py text eol=lf
+scripts/singleton_shape_rescue_v1.py text eol=lf
 scripts/straight_equality_slot_rescue_v1.py text eol=lf
 scripts/stroke_grouping_v1.py text eol=lf
 scripts/evaluate_partition_context_ranker_v1.py text eol=lf

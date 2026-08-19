@@ -91,18 +91,18 @@ def main() -> int:
         "value_cross_plus_open_fence_enabled", False,
     ):
         raise ValueError("open-fence plus rescue is not enabled")
-    baseline_cross = deepcopy(runtime.cross_merge_configuration)
-    baseline_cross["auxiliary_nested_expression_enabled"] = False
-    baseline_cross["auxiliary_x_candidate_maximum_rank"] = 0
-    baseline_cross["auxiliary_open_fence_candidate_maximum_rank"] = 0
-    baseline_placement = deepcopy(runtime.placement_configuration)
-    baseline_placement["formula_role_typo"][
-        "value_cross_plus_open_fence_enabled"
-    ] = False
+    if runtime.singleton_configuration["token_candidate_maximum_ranks"] != {
+        "/": 1, r"\times": 2,
+    }:
+        raise ValueError("ranked singleton rescue is not enabled")
+    baseline_singleton = deepcopy(runtime.singleton_configuration)
+    baseline_singleton["token_confidence_thresholds"][r"\times"] = 0.45
+    baseline_singleton["token_candidate_maximum_ranks"] = {
+        "/": 1, r"\times": 1,
+    }
     baseline_runtime = replace(
         runtime,
-        cross_merge_configuration=baseline_cross,
-        placement_configuration=baseline_placement,
+        singleton_configuration=baseline_singleton,
     )
     protocol, duplicates = load_crohme(crohme)
     labels = set(runtime.labels)
@@ -138,6 +138,7 @@ def main() -> int:
     latin_t_changed_ids = []
     nested_cross_changed_ids = []
     open_fence_plus_changed_ids = []
+    singleton_audit_ids = []
     for formula_id, sample, _truth_tokens in eligible:
         result = runtime.infer(_source(formula_id, sample))
         candidate_results[formula_id] = result
@@ -165,16 +166,19 @@ def main() -> int:
             for change in role_changes
         ):
             open_fence_plus_changed_ids.append(formula_id)
-        if (
-            formula_id in nested_cross_changed_ids
-            or formula_id in open_fence_plus_changed_ids
-        ):
-            changed_ids.append(formula_id)
+        if fusion_audit.get("changed", 0):
+            singleton_audit_ids.append(formula_id)
     baseline_results = {
         formula_id: baseline_runtime.infer(_source(formula_id, sample))
         for formula_id, sample, _truth_tokens in eligible
-        if formula_id in set(changed_ids)
+        if formula_id in set(singleton_audit_ids)
     }
+    ranked_singleton_changed_ids = sorted(
+        formula_id for formula_id, baseline in baseline_results.items()
+        if baseline["finalized_tokens"]
+        != candidate_results[formula_id]["finalized_tokens"]
+    )
+    changed_ids = list(ranked_singleton_changed_ids)
     grouping_before = grouping_after = formula_before = formula_after = 0
     grouping_improved = []; grouping_regressed = []
     formula_improved = []; formula_regressed = []
@@ -219,6 +223,14 @@ def main() -> int:
                 "formula_placement_audit": candidate["audit"][
                     "candidate_context_fusion"
                 ]["formula_placement_rescue"],
+                "singleton_shape_audit": {
+                    "configuration": candidate["audit"][
+                        "candidate_context_fusion"
+                    ]["configuration"],
+                    "changes": candidate["audit"][
+                        "candidate_context_fusion"
+                    ]["changes"],
+                },
             })
     report = {
         "schema": SCHEMA,
@@ -263,6 +275,10 @@ def main() -> int:
             "changed_formulas": len(open_fence_plus_changed_ids),
             "changed_formula_ids": sorted(open_fence_plus_changed_ids),
         },
+        "ranked_singleton_rescue": {
+            "changed_formulas": len(ranked_singleton_changed_ids),
+            "changed_formula_ids": sorted(ranked_singleton_changed_ids),
+        },
         "current_loop": {
             "changed_formulas": len(changed_ids),
             "changed_formula_ids": sorted(changed_ids),
@@ -305,6 +321,7 @@ def main() -> int:
         "latin_t_context_changed": len(latin_t_changed_ids),
         "nested_expression_cross_merge_changed": len(nested_cross_changed_ids),
         "open_fence_plus_rescue_changed": len(open_fence_plus_changed_ids),
+        "ranked_singleton_rescue_changed": len(ranked_singleton_changed_ids),
     }, ensure_ascii=False))
     return 0
 
