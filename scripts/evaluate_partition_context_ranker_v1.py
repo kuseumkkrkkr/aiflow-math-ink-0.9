@@ -25,6 +25,10 @@ from formula_placement_rescue_v1 import (
     CONFIG_SCHEMA as PLACEMENT_CONFIG_SCHEMA, SCHEMA as PLACEMENT_SCHEMA,
     apply_formula_placement_rescue,
 )
+from singleton_shape_rescue_v1 import (
+    SCHEMA as SINGLETON_SCHEMA, apply_singleton_shape_rescue,
+    validate_configuration as validate_singleton_configuration,
+)
 from straight_equality_slot_rescue_v1 import (
     CONFIG_SCHEMA as EQUALITY_CONFIG_SCHEMA, SCHEMA as EQUALITY_SCHEMA,
     apply_straight_equality_slot_rescue,
@@ -65,6 +69,11 @@ POSTHOC_DESIGN_GUARD = {
     "minimum_merge_hwr_gain": 0.10,
     "maximum_merge_pair_gap_ref": 0.10,
     "coarsening_only": True,
+}
+PRODUCT_SINGLETON_CONFIGURATION = {
+    "auxiliary_policy": "old_new_product_probability_fusion",
+    "auxiliary_weight": 0.6,
+    "token_confidence_thresholds": {"/": 0.50, r"\times": 0.45},
 }
 
 
@@ -341,9 +350,10 @@ def _score(samples: list[Sample], selected: dict[str, dict], truth_labels: dict[
 def _auxiliary_rows(
     samples: list[Sample], selected: dict[str, dict], probability: np.ndarray,
     slices: dict[str, slice], labels: list[str], *, width: int, policy: str,
-    weight: float,
+    weight: float, preserve_source_candidates: bool = False,
 ) -> list[dict]:
     output = []
+    label_index = {label: index for index, label in enumerate(labels)}
     for sample in samples:
         local = probability[slices[sample.sample_id]]
         candidate_index = {
@@ -353,7 +363,15 @@ def _auxiliary_rows(
         for source in selected[sample.sample_id]["rows"]:
             group = frozenset(int(value) for value in source["group"])
             values = local[candidate_index[group]]
-            indices = np.argsort(-values)[:width]
+            if preserve_source_candidates:
+                source_indices = [
+                    label_index[str(token)] for token in source["final_topk"]
+                ]
+                indices = np.asarray(sorted(
+                    source_indices, key=lambda index: -float(values[index]),
+                )[:width])
+            else:
+                indices = np.argsort(-values)[:width]
             output.append({
                 "record_id": str(source["record_id"]),
                 "formula_id": sample.sample_id,
@@ -363,6 +381,7 @@ def _auxiliary_rows(
                     **source["geometry"],
                     **group_shape_features(sample.strokes, sorted(group)),
                 },
+                "context": dict(source["context"]),
                 "hwr_policy": policy,
                 "hwr_fusion_weight": float(weight),
                 "hwr_candidate_width": width,
@@ -373,6 +392,7 @@ def _auxiliary_rows(
 def _score_finalized(
     samples: list[Sample], selected: dict[str, dict], truth_labels: dict[str, list[str]],
     finalizer: OwnedFormulaContextFinalizer, auxiliary: dict | None = None,
+    singleton_auxiliary: dict | None = None,
 ) -> dict:
     runtime_rows = []
     for sample in samples:
@@ -427,6 +447,91 @@ def _score_finalized(
 
     base = score(finalized, runtime_rows)
     final_rows = finalized
+    singleton_audit = {"enabled": False}
+    singleton_rows = None
+    singleton_score = None
+    singleton_improved: list[str] = []
+    singleton_regressed: list[str] = []
+    restricted_fusion_score = None
+    restricted_fusion_audit = {"enabled": False}
+    restricted_fusion_improved: list[str] = []
+    restricted_fusion_regressed: list[str] = []
+    combined_score = None
+    combined_audit = {"enabled": False}
+    combined_improved: list[str] = []
+    combined_regressed: list[str] = []
+    if singleton_auxiliary is not None:
+        singleton_rows = _auxiliary_rows(
+            samples, selected, singleton_auxiliary["probability"],
+            singleton_auxiliary["slices"], singleton_auxiliary["labels"],
+            width=5, policy=singleton_auxiliary["policy"],
+            weight=singleton_auxiliary["weight"],
+        )
+        predictions = {
+            str(row["record_id"]): str(row["finalized_top1"])
+            for row in finalized
+        }
+        rescued, singleton_audit = apply_singleton_shape_rescue(
+            runtime_rows, predictions, singleton_rows,
+            singleton_auxiliary["configuration"],
+        )
+        final_rows = [
+            {
+                **row,
+                "finalized_top1": rescued[str(row["record_id"])],
+                "decision_source": (
+                    "singleton_shape_rescue"
+                    if rescued[str(row["record_id"])] != str(row["finalized_top1"])
+                    else row.get("decision_source", "formula_context_finalizer")
+                ),
+            }
+            for row in finalized
+        ]
+        singleton_score = score(final_rows, runtime_rows)
+        base_failures = {str(row["sample_id"]) for row in base["failures"]}
+        singleton_failures = {
+            str(row["sample_id"]) for row in singleton_score["failures"]
+        }
+        singleton_improved = sorted(base_failures - singleton_failures)
+        singleton_regressed = sorted(singleton_failures - base_failures)
+        restricted_rows = _auxiliary_rows(
+            samples, selected, singleton_auxiliary["probability"],
+            singleton_auxiliary["slices"], singleton_auxiliary["labels"],
+            width=5, policy=singleton_auxiliary["policy"],
+            weight=singleton_auxiliary["weight"],
+            preserve_source_candidates=True,
+        )
+        restricted_finalized, restricted_fusion_audit = finalizer.finalize(
+            restricted_rows,
+        )
+        restricted_fusion_score = score(restricted_finalized, runtime_rows)
+        restricted_failures = {
+            str(row["sample_id"])
+            for row in restricted_fusion_score["failures"]
+        }
+        restricted_fusion_improved = sorted(base_failures - restricted_failures)
+        restricted_fusion_regressed = sorted(restricted_failures - base_failures)
+        restricted_predictions = {
+            str(row["record_id"]): str(row["finalized_top1"])
+            for row in restricted_finalized
+        }
+        combined_predictions, combined_audit = apply_singleton_shape_rescue(
+            runtime_rows, restricted_predictions, singleton_rows,
+            singleton_auxiliary["configuration"],
+        )
+        combined_rows = [
+            {
+                **row,
+                "finalized_top1": combined_predictions[str(row["record_id"])],
+            }
+            for row in restricted_finalized
+        ]
+        combined_score = score(combined_rows, runtime_rows)
+        combined_failures = {
+            str(row["sample_id"]) for row in combined_score["failures"]
+        }
+        combined_improved = sorted(base_failures - combined_failures)
+        combined_regressed = sorted(combined_failures - base_failures)
     placement_audit = equality_audit = {"enabled": False}
     auxiliary_rows = None
     placement_score = equality_score = None
@@ -437,7 +542,7 @@ def _score_finalized(
             weight=auxiliary["weight"],
         )
         placement_rows, placement_audit = apply_formula_placement_rescue(
-            finalized, auxiliary_rows, auxiliary["placement_configuration"],
+            final_rows, auxiliary_rows, auxiliary["placement_configuration"],
         )
         placement_score = score(placement_rows, auxiliary_rows)
         final_rows, equality_audit = apply_straight_equality_slot_rescue(
@@ -445,7 +550,7 @@ def _score_finalized(
         )
         equality_score = score(final_rows, auxiliary_rows)
     total = len(samples)
-    final_score = equality_score or base
+    final_score = equality_score or combined_score or singleton_score or base
     result = {
         "formula_exact_count": base["exact"],
         "formula_exact": base["exact"] / total,
@@ -464,10 +569,34 @@ def _score_finalized(
             "grouping_mutations": audit["grouping_mutations"],
             "equation_correction_enabled": audit["equation_correction_enabled"],
             "formula_layout": audit["formula_layout"],
+            "singleton_shape": singleton_audit,
+            "restricted_product_fusion_finalizer": restricted_fusion_audit,
             "formula_placement": placement_audit,
             "straight_equality": equality_audit,
         },
     }
+    if singleton_rows is not None and singleton_score is not None:
+        result.update({
+            "singleton_formula_exact_count": singleton_score["exact"],
+            "singleton_formula_exact": singleton_score["exact"] / total,
+            "singleton_improved": singleton_improved,
+            "singleton_regressed": singleton_regressed,
+        })
+    if restricted_fusion_score is not None:
+        result.update({
+            "restricted_product_fusion_formula_exact_count": restricted_fusion_score["exact"],
+            "restricted_product_fusion_formula_exact": restricted_fusion_score["exact"] / total,
+            "restricted_product_fusion_improved": restricted_fusion_improved,
+            "restricted_product_fusion_regressed": restricted_fusion_regressed,
+        })
+    if combined_score is not None:
+        result.update({
+            "combined_formula_exact_count": combined_score["exact"],
+            "combined_formula_exact": combined_score["exact"] / total,
+            "combined_improved": combined_improved,
+            "combined_regressed": combined_regressed,
+            "combined_singleton_audit": combined_audit,
+        })
     if auxiliary_rows is not None and placement_score is not None and equality_score is not None:
         result.update({
             "top20_formula_oracle_count": placement_score["oracle"],
@@ -557,6 +686,7 @@ def main() -> int:
     parser.add_argument("--candidate-loo-heads", type=Path)
     parser.add_argument("--formula-sequence-config", type=Path)
     parser.add_argument("--formula-syntax-rescue-config", type=Path)
+    parser.add_argument("--candidate-context-auxiliary-hwr-checkpoint", type=Path)
     parser.add_argument("--auxiliary-hwr-checkpoint", type=Path)
     parser.add_argument("--auxiliary-fusion-weight", type=float, default=0.6)
     parser.add_argument("--formula-placement-config", type=Path)
@@ -576,6 +706,8 @@ def main() -> int:
         parser.error("auxiliary HWR, formula placement, and straight equality configs are required together")
     if args.candidate_loo_heads is not None and args.auxiliary_hwr_checkpoint is not None:
         parser.error("product-fusion auxiliary cannot be mixed with writer-LOO evaluation")
+    if args.candidate_loo_heads is not None and args.candidate_context_auxiliary_hwr_checkpoint is not None:
+        parser.error("product singleton auxiliary cannot be mixed with writer-LOO evaluation")
     if not 0.0 <= args.auxiliary_fusion_weight <= 1.0:
         parser.error("--auxiliary-fusion-weight must be in [0, 1]")
     output = args.output.resolve()
@@ -628,6 +760,43 @@ def main() -> int:
         }
     auxiliary = None
     auxiliary_contract = {"enabled": False}
+    singleton_auxiliary = None
+    singleton_contract = {"enabled": False}
+    if args.candidate_context_auxiliary_hwr_checkpoint is not None:
+        singleton_hwr_path = args.candidate_context_auxiliary_hwr_checkpoint.resolve()
+        singleton_hwr, singleton_labels, _ = _load_model(singleton_hwr_path, device)
+        if singleton_labels != labels:
+            raise ValueError("singleton auxiliary HWR vocabulary differs from frozen HWR vocabulary")
+        for name, value in hwr.state_dict().items():
+            if not name.startswith("math_head.") and not torch.equal(
+                value.detach().cpu(), singleton_hwr.state_dict()[name].detach().cpu()
+            ):
+                raise ValueError(f"singleton auxiliary and frozen HWR encoders differ: {name}")
+        configuration = validate_singleton_configuration(
+            PRODUCT_SINGLETON_CONFIGURATION,
+        )
+        singleton_probability = _probabilities(
+            singleton_hwr.math_head, embeddings, device,
+        )
+        singleton_weight = float(configuration["auxiliary_weight"])
+        singleton_auxiliary = {
+            "probability": (
+                (1.0 - singleton_weight) * probability
+                + singleton_weight * singleton_probability
+            ),
+            "slices": slices,
+            "labels": labels,
+            "policy": configuration["auxiliary_policy"],
+            "weight": singleton_weight,
+            "configuration": configuration,
+        }
+        singleton_contract = {
+            "enabled": True,
+            "rescue_schema": SINGLETON_SCHEMA,
+            "configuration": configuration,
+            "auxiliary_hwr_checkpoint_sha256": _sha256(singleton_hwr_path),
+            "current_96_formula_training_overlap": True,
+        }
     if args.auxiliary_hwr_checkpoint is not None:
         auxiliary_hwr_path = args.auxiliary_hwr_checkpoint.resolve()
         placement_path = args.formula_placement_config.resolve()
@@ -721,9 +890,11 @@ def main() -> int:
     finalized_scores = {
         "geometry_top1": _score_finalized(
             test, geometry_selected, truth_labels, finalizer, auxiliary,
+            singleton_auxiliary,
         ),
         "posthoc_design_guard": _score_finalized(
             test, context_design_guard, truth_labels, finalizer, auxiliary,
+            singleton_auxiliary,
         ),
     }
     baseline = scores["geometry_top1"]
@@ -755,6 +926,7 @@ def main() -> int:
             "formula_sequence_config_sha256": _sha256(sequence_path) if sequence_path else None,
             "formula_syntax_rescue_config_sha256": _sha256(syntax_path) if syntax_path else None,
             "auxiliary_candidates": auxiliary_contract,
+            "singleton_shape_rescue": singleton_contract,
         },
         "grouping_training_scope": "first 47 accepted ownership formulas",
         "ranker_training_scope": "first 47 writer-LOO grouping candidate partitions",
@@ -774,6 +946,7 @@ def main() -> int:
             "hwr_and_context_training_scope": "first 47 ownership formulas plus pre-existing external/synthetic contracts",
             "candidate_policy": candidate_policy,
             "auxiliary_candidates": auxiliary_contract,
+            "singleton_shape_rescue": singleton_contract,
         },
         "training": {
             "hwr_ranker": hwr_training, "context_ranker": context_training,
@@ -830,6 +1003,13 @@ def main() -> int:
                 "auxiliary_hwr_checkpoint": str(auxiliary_hwr_path) if auxiliary is not None else None,
                 "formula_placement_config": str(placement_path) if auxiliary is not None else None,
                 "straight_equality_config": str(equality_path) if auxiliary is not None else None,
+            },
+            "singleton_shape_rescue": {
+                **singleton_contract,
+                "auxiliary_hwr_checkpoint": (
+                    str(singleton_hwr_path)
+                    if singleton_auxiliary is not None else None
+                ),
             },
         },
         "requires_explicit_shadow_opt_in": True,

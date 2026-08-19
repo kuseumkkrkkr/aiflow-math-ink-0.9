@@ -1,0 +1,61 @@
+{
+  "schema": "aiflow-raw-candidate-context-fusion-runtime-manifest/v1",
+  "generated_at": "2026-08-19T15:03:44.7756390Z",
+  "status": "development_only_posthoc_shadow",
+  "shadow_runtime_admitted": true,
+  "product_default_admitted": false,
+  "configuration": {
+    "path": "artifacts/raw_candidate_context_fusion_20260819_r1_shadow/candidate_context_fusion_runtime_config.json",
+    "sha256": "191b6e2403dbb6e78f5880d6d339ea7a62ee9f4402132ae9a22d6e7fc041c63a"
+  },
+  "selected_summary": {
+    "path": "artifacts/raw_candidate_context_fusion_20260819_r1_shadow/selected_summary.json",
+    "sha256": "e2ef776ee407450b63866d6adbad7f2fb1c71682ca5627091d391974caa14f2c"
+  },
+  "evaluation_evidence": {
+    "path": "artifacts/raw_candidate_context_fusion_20260819_r1_shadow/evaluation_evidence.json",
+    "sha256": "c74cd704e9e0f73be6d3ec81d144f04080d0f8908b0fdbbcffa4e34e519c3904"
+  },
+  "runtime_contract": {
+    "authoritative_candidates": "original frozen HWR Top-5",
+    "auxiliary_operation": "probability reranking only",
+    "formula_context_finalizer_reapplied": true,
+    "singleton_shape_tokens": ["/", "\\times"],
+    "all_strokes_exactly_once": true,
+    "new_tokens": 0,
+    "deleted_glyphs": 0,
+    "grouping_mutations": 0,
+    "arithmetic_solver": false
+  },
+  "metrics": {
+    "chronological_49": {
+      "baseline_formula_exact_count": 38,
+      "challenger_formula_exact_count": 40,
+      "challenger_formula_exact": 0.8163265306122449,
+      "improved_formula_ids": ["aiflow_0049", "aiflow_0078"],
+      "regressed_formula_ids": [],
+      "original_top5_oracle_count": 41
+    },
+    "raw_runtime": {
+      "formulas": 159,
+      "chronological_test_exact_count": 40,
+      "chronological_test_total": 49,
+      "all_exact_stroke_cover": true,
+      "all_candidate_preserving": true,
+      "all_inserted_or_deleted_glyphs_zero": true,
+      "all_product_defaults_disabled": true,
+      "output_sha256": "7742ab42aa44a1abcc0b570fe4f9a38301362aac6a1bd3bb18ed12da7293979b"
+    }
+  },
+  "code": {
+    "evaluator": "scripts/evaluate_partition_context_ranker_v1.py",
+    "runtime": "scripts/raw_formula_context_runtime_v1.py",
+    "report": "reports/RAW_STROKE_FORMULA_CONTEXT_LOOP_20260819.md"
+  },
+  "limits": [
+    "the chronological 49-formula set was inspected during posthoc selection",
+    "the auxiliary HWR head was trained with the current 96 formulas",
+    "single-glyph x/times remains unresolved because formula context is absent",
+    "fresh commercial writer/formula-disjoint acceptance is required before product promotion"
+  ]
+}

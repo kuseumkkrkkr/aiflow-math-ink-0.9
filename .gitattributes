@@ -1,1 +1,2 @@
 *.jsonl binary
+artifacts/raw_candidate_context_fusion_20260819_r1_shadow/*.json binary

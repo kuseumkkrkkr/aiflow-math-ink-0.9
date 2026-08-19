@@ -1,0 +1,64 @@
+{
+  "schema": "aiflow-raw-candidate-context-fusion-evaluation/v1",
+  "generated_at": "2026-08-19T15:03:44.7756390Z",
+  "status": "development_only_posthoc_shadow",
+  "protocol": {
+    "dataset_formulas": 96,
+    "fit_formulas": 47,
+    "test_formulas": 49,
+    "test_already_inspected": true,
+    "auxiliary_head_current_96_overlap": true
+  },
+  "artifacts": {
+    "dataset_info_sha256": "03dfc7d65cf39b66410198e0410414f73398ec968bac3cd3c73fe26ce699cb3f",
+    "ownership_sha256": "2b466b35cedfa9f9d3ed4f965ef36884cb0eab0791466b50524e906b5f0647df",
+    "partition_ranker_sha256": "0d283d40b40f60d58131dec213efb84074f9119ac82b32fcb893ca931aeb0582",
+    "hwr_checkpoint_sha256": "1fed74b4580d3acc9ff48544a7d715c52170037bcb0842921b1fe0339f0abd1d",
+    "auxiliary_hwr_checkpoint_sha256": "04f8608aebcf6c02d45ad6f5735229b9eaa2c4b4e1be0db4793d02273ef2d00e",
+    "context_checkpoint_sha256": "7e0ff1b04ba1071867bfa6811869f242907ebe017d0996597776c6050cc2fc94"
+  },
+  "posthoc_design_guard": {
+    "grouping_exact": {"count": 48, "total": 49},
+    "raw_hwr_formula_exact": {"count": 15, "total": 49},
+    "masked_context_formula_exact": {"count": 29, "total": 49},
+    "baseline_finalizer_formula_exact": {"count": 38, "total": 49},
+    "singleton_only_formula_exact": {"count": 39, "total": 49},
+    "restricted_fusion_only_formula_exact": {"count": 39, "total": 49},
+    "combined_formula_exact": {"count": 40, "total": 49, "rate": 0.8163265306122449},
+    "original_top5_formula_oracle": {"count": 41, "total": 49}
+  },
+  "comparison": {
+    "singleton_improved": ["aiflow_0049"],
+    "restricted_fusion_improved": ["aiflow_0078"],
+    "combined_improved": ["aiflow_0049", "aiflow_0078"],
+    "combined_regressed": []
+  },
+  "remaining": {
+    "grouping_failure": ["aiflow_0010"],
+    "truth_outside_original_top5": [
+      "aiflow_0004",
+      "aiflow_0046",
+      "aiflow_0052",
+      "aiflow_0056",
+      "aiflow_0058",
+      "aiflow_0061",
+      "aiflow_0064"
+    ],
+    "unresolved_without_formula_context": ["aiflow_0072"]
+  },
+  "contracts": {
+    "target_label_writer_or_target_count_input": false,
+    "all_strokes_exactly_once": true,
+    "original_top5_candidate_set_preserved": true,
+    "new_tokens": 0,
+    "deleted_glyphs": 0,
+    "grouping_mutations": 0,
+    "arithmetic_solver": false,
+    "product_default_enabled": false
+  },
+  "full_local_probe": {
+    "path": "artifacts/partition_context_ranker_20260820_r17_candidate_context_final_probe/partition_context_ranker_summary.json",
+    "sha256": "3fa93f8423d97382e4a559c1b856716c154826b2ea246489f283d0e810831366",
+    "selected_artifact": false
+  }
+}

@@ -26,16 +26,21 @@ from evaluate_48hz_prefix_v1 import DEFAULT_PRODUCT, _load_model, _sha256
 from evaluate_joint_hwr_grouping_v1 import _candidate_embeddings, _probabilities
 from evaluate_partition_context_ranker_v1 import (
     FEATURE_NAMES, POSTHOC_DESIGN_GUARD, SCHEMA as RANKER_SCHEMA,
-    _attach_features, _gate_accept, _geometry_selection, _partition_rows,
-    _select,
+    _attach_features, _auxiliary_rows, _gate_accept, _geometry_selection,
+    _partition_rows, _select,
 )
 from finalize_formula_context_v1 import DEFAULT_CONTEXT, OwnedFormulaContextFinalizer
+from singleton_shape_rescue_v1 import (
+    SCHEMA as SINGLETON_SCHEMA, apply_singleton_shape_rescue,
+    validate_configuration as validate_singleton_configuration,
+)
 from stroke_grouping_v1 import build_lattice, candidate_features, enumerate_partitions
 from train_project_owned_grouping_v1 import Sample
 
 
 SCHEMA = "aiflow-raw-formula-context-runtime/v1"
 OUTPUT_SCHEMA = "aiflow-raw-formula-context-result/v1"
+CANDIDATE_FUSION_CONFIG_SCHEMA = "aiflow-raw-candidate-context-fusion-runtime-config/v1"
 
 
 def _device(name: str) -> torch.device:
@@ -89,6 +94,39 @@ def _load_inputs(path: Path) -> list[dict[str, Any]]:
     return payload
 
 
+def _apply_singleton_finalized_rows(
+    runtime_rows: list[dict], finalized: list[dict], auxiliary_rows: list[dict],
+    configuration: dict,
+) -> tuple[list[dict], dict]:
+    predictions = {
+        str(row["record_id"]): str(row["finalized_top1"])
+        for row in finalized
+    }
+    rescued, audit = apply_singleton_shape_rescue(
+        runtime_rows, predictions, auxiliary_rows, configuration,
+    )
+    hwr_top1 = {
+        str(row["record_id"]): str(row["final_topk"][0])
+        for row in runtime_rows
+    }
+    output = []
+    for source in finalized:
+        record_id = str(source["record_id"])
+        token = str(rescued[record_id])
+        changed_by_rescue = token != str(source["finalized_top1"])
+        output.append({
+            **source,
+            "finalized_top1": token,
+            "changed": token != hwr_top1[record_id],
+            "decision_source": (
+                "singleton_shape_rescue"
+                if changed_by_rescue
+                else source.get("decision_source", "formula_context_finalizer")
+            ),
+        })
+    return output, audit
+
+
 @dataclass(frozen=True)
 class RawFormulaContextRuntimeV1:
     ranker_payload: dict[str, Any]
@@ -97,6 +135,10 @@ class RawFormulaContextRuntimeV1:
     finalizer: OwnedFormulaContextFinalizer
     device: torch.device
     partition_ranker_sha256: str
+    singleton_hwr: Any | None
+    singleton_configuration: dict[str, Any] | None
+    singleton_config_sha256: str | None
+    singleton_hwr_sha256: str | None
 
     @classmethod
     def from_artifacts(
@@ -104,6 +146,8 @@ class RawFormulaContextRuntimeV1:
         *, device: str = "auto", batch_size: int = 128,
         formula_sequence_config: Path | None = None,
         formula_syntax_rescue_config: Path | None = None,
+        candidate_context_fusion_config: Path | None = None,
+        candidate_context_auxiliary_hwr_checkpoint: Path | None = None,
         allow_posthoc_shadow: bool = False,
     ) -> "RawFormulaContextRuntimeV1":
         ranker_path = Path(partition_ranker).expanduser().resolve()
@@ -167,13 +211,98 @@ class RawFormulaContextRuntimeV1:
                 raise ValueError(f"{name} config hash mismatch")
         resolved_device = _device(device)
         hwr, labels, _ = _load_model(hwr_path, resolved_device)
+        if bool(candidate_context_fusion_config) != bool(candidate_context_auxiliary_hwr_checkpoint):
+            raise ValueError(
+                "candidate context fusion config and auxiliary HWR checkpoint are required together"
+            )
+        singleton_hwr = None
+        singleton_configuration = None
+        singleton_config_sha256 = None
+        singleton_hwr_sha256 = None
+        if candidate_context_fusion_config is not None:
+            singleton_config_path = Path(candidate_context_fusion_config).expanduser().resolve()
+            singleton_hwr_path = Path(
+                candidate_context_auxiliary_hwr_checkpoint,
+            ).expanduser().resolve()
+            for path in (singleton_config_path, singleton_hwr_path):
+                if not path.is_file():
+                    raise FileNotFoundError(path)
+            singleton_payload = json.loads(
+                singleton_config_path.read_text(encoding="utf-8")
+            )
+            gate = dict(singleton_payload.get("gate") or {})
+            provenance = dict(singleton_payload.get("provenance") or {})
+            artifacts = dict(singleton_payload.get("artifacts") or {})
+            mode = dict(singleton_payload.get("mode") or {})
+            rerank_mode = dict(mode.get("restricted_candidate_rerank") or {})
+            singleton_mode = dict(mode.get("singleton_shape_rescue") or {})
+            if (
+                singleton_payload.get("schema") != CANDIDATE_FUSION_CONFIG_SCHEMA
+                or singleton_payload.get("rescue_schema") != SINGLETON_SCHEMA
+                or gate.get("shadow_runtime_admitted") is not True
+                or gate.get("product_default_admitted") is not False
+                or provenance.get("current_96_formula_training_overlap") is not True
+                or rerank_mode != {
+                    "enabled": True,
+                    "candidate_width": 5,
+                    "preserve_original_candidate_set": True,
+                    "reapply_formula_context_finalizer": True,
+                }
+                or singleton_mode != {
+                    "enabled": True,
+                    "preserve_original_candidate_set": True,
+                }
+            ):
+                raise ValueError("candidate context fusion shadow contract mismatch")
+            expected_hashes = {
+                "partition_ranker_sha256": _sha256(ranker_path),
+                "hwr_checkpoint_sha256": _sha256(hwr_path),
+                "context_checkpoint_sha256": _sha256(context_path),
+                "auxiliary_hwr_checkpoint_sha256": _sha256(singleton_hwr_path),
+            }
+            if any(artifacts.get(key) != value for key, value in expected_hashes.items()):
+                raise ValueError("candidate context fusion artifact hash mismatch")
+            evidence = dict(singleton_payload.get("evidence") or {})
+            for name in ("selected_summary", "evaluation_evidence"):
+                evidence_path = singleton_config_path.parent / str(
+                    evidence.get(name, ""),
+                )
+                if (
+                    not evidence_path.is_file()
+                    or _sha256(evidence_path) != evidence.get(f"{name}_sha256")
+                ):
+                    raise ValueError(
+                        f"candidate context fusion {name} hash mismatch"
+                    )
+            singleton_configuration = validate_singleton_configuration(
+                dict(singleton_payload.get("configuration") or {}),
+            )
+            if singleton_configuration["auxiliary_policy"] != "old_new_product_probability_fusion":
+                raise ValueError("candidate context fusion policy mismatch")
+            singleton_hwr, singleton_labels, _ = _load_model(
+                singleton_hwr_path, resolved_device,
+            )
+            if singleton_labels != labels:
+                raise ValueError("singleton auxiliary HWR vocabulary mismatch")
+            singleton_state = singleton_hwr.state_dict()
+            for name, value in hwr.state_dict().items():
+                if not name.startswith("math_head.") and not torch.equal(
+                    value.detach().cpu(), singleton_state[name].detach().cpu()
+                ):
+                    raise ValueError(f"singleton auxiliary and frozen HWR encoders differ: {name}")
+            singleton_config_sha256 = _sha256(singleton_config_path)
+            singleton_hwr_sha256 = _sha256(singleton_hwr_path)
         finalizer = OwnedFormulaContextFinalizer(
             context_path, hwr_path, device=str(resolved_device), batch_size=batch_size,
             semantic_guards=True, equation_correction=False, formula_layout=True,
             formula_sequence_config=sequence_path,
             formula_syntax_rescue_config=syntax_path,
         )
-        return cls(payload, hwr, labels, finalizer, resolved_device, _sha256(ranker_path))
+        return cls(
+            payload, hwr, labels, finalizer, resolved_device, _sha256(ranker_path),
+            singleton_hwr, singleton_configuration, singleton_config_sha256,
+            singleton_hwr_sha256,
+        )
 
     def _sample(self, source: dict[str, Any]) -> Sample:
         formula_id, strokes = _validate_strokes(source)
@@ -235,12 +364,51 @@ class RawFormulaContextRuntimeV1:
         selected = proposal if accepted else baseline
         runtime_rows = [
             {
-                key: value for key, value in row.items()
-                if key not in {"group", "full_probability", "grouping_features"}
+                **{
+                    key: value for key, value in row.items()
+                    if key not in {"group", "full_probability", "grouping_features"}
+                },
+                "formula_id": sample.sample_id,
             }
             for row in selected["rows"]
         ]
-        finalized, finalizer_audit = self.finalizer.finalize(runtime_rows)
+        singleton_audit = {"enabled": False}
+        if self.singleton_hwr is not None:
+            auxiliary_probability = _probabilities(
+                self.singleton_hwr.math_head, embeddings, self.device,
+            )
+            weight = float(self.singleton_configuration["auxiliary_weight"])
+            fused_probability = (
+                (1.0 - weight) * probabilities + weight * auxiliary_probability
+            )
+            restricted_rows = _auxiliary_rows(
+                [sample], {sample.sample_id: selected}, fused_probability, slices,
+                self.labels, width=5,
+                policy=self.singleton_configuration["auxiliary_policy"],
+                weight=weight, preserve_source_candidates=True,
+            )
+            finalized, finalizer_audit = self.finalizer.finalize(restricted_rows)
+            singleton_rows = _auxiliary_rows(
+                [sample], {sample.sample_id: selected}, fused_probability, slices,
+                self.labels, width=5,
+                policy=self.singleton_configuration["auxiliary_policy"],
+                weight=weight,
+            )
+            finalized, singleton_audit = _apply_singleton_finalized_rows(
+                runtime_rows, finalized, singleton_rows,
+                self.singleton_configuration,
+            )
+            singleton_audit = {
+                **singleton_audit,
+                "restricted_candidate_rerank": {
+                    "enabled": True,
+                    "candidate_set_preserved": True,
+                    "candidate_width": 5,
+                    "formula_context_finalizer_reapplied": True,
+                },
+            }
+        else:
+            finalized, finalizer_audit = self.finalizer.finalize(runtime_rows)
         finalized.sort(key=lambda row: int(row["context_index"]))
         runtime_by_record = {str(row["record_id"]): row for row in runtime_rows}
         source_by_group = {
@@ -286,6 +454,7 @@ class RawFormulaContextRuntimeV1:
                 "hwr_top1": str(runtime_by_record[str(row["record_id"])]["final_topk"][0]),
                 "finalized_top1": str(row["finalized_top1"]),
                 "changed": bool(row["changed"]),
+                "decision_source": row.get("decision_source"),
             }
             for row in finalized
         ]
@@ -316,6 +485,14 @@ class RawFormulaContextRuntimeV1:
                 "partition_ranker_sha256": self.partition_ranker_sha256,
                 "hwr_checkpoint_sha256": self.finalizer.hwr_checkpoint_sha256,
                 "context_checkpoint_sha256": self.finalizer.checkpoint_sha256,
+                "candidate_context_fusion": {
+                    **singleton_audit,
+                    "enabled": self.singleton_hwr is not None,
+                    "configuration_sha256": self.singleton_config_sha256,
+                    "auxiliary_hwr_checkpoint_sha256": self.singleton_hwr_sha256,
+                    "current_96_formula_training_overlap": self.singleton_hwr is not None,
+                    "product_default_enabled": False,
+                },
                 "product_default_enabled": False,
                 "posthoc_test_tuning": True,
                 "candidate_partitions_detail": [
@@ -353,6 +530,32 @@ def _self_test() -> None:
         pass
     else:
         raise AssertionError("invalid stroke order was accepted")
+    configuration = {
+        "auxiliary_policy": "old_new_product_probability_fusion",
+        "auxiliary_weight": 0.6,
+        "token_confidence_thresholds": {"/": 0.50, r"\times": 0.45},
+    }
+    runtime_rows = [{
+        "record_id": "r", "formula_id": "f", "final_topk": ["1", "/"],
+        "final_topk_probabilities": [0.7, 0.2],
+        "context": {"index": 0, "length": 1}, "geometry": {},
+    }]
+    finalized = [{
+        **runtime_rows[0], "context_index": 0, "finalized_top1": "1",
+        "changed": False,
+    }]
+    auxiliary_rows = [{
+        "record_id": "r", "formula_id": "f", "final_topk": ["/", "1"],
+        "final_topk_probabilities": [0.51, 0.49],
+        "hwr_policy": configuration["auxiliary_policy"],
+        "hwr_fusion_weight": configuration["auxiliary_weight"],
+    }]
+    rescued, audit = _apply_singleton_finalized_rows(
+        runtime_rows, finalized, auxiliary_rows, configuration,
+    )
+    assert rescued[0]["finalized_top1"] == "/"
+    assert rescued[0]["decision_source"] == "singleton_shape_rescue"
+    assert audit["changed"] == 1
 
 
 def main() -> int:
@@ -362,6 +565,8 @@ def main() -> int:
     parser.add_argument("--context-checkpoint", type=Path, default=DEFAULT_CONTEXT)
     parser.add_argument("--formula-sequence-config", type=Path)
     parser.add_argument("--formula-syntax-rescue-config", type=Path)
+    parser.add_argument("--candidate-context-fusion-config", type=Path)
+    parser.add_argument("--candidate-context-auxiliary-hwr-checkpoint", type=Path)
     parser.add_argument("--input", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
@@ -388,6 +593,8 @@ def main() -> int:
         device=args.device, batch_size=args.batch_size,
         formula_sequence_config=args.formula_sequence_config,
         formula_syntax_rescue_config=args.formula_syntax_rescue_config,
+        candidate_context_fusion_config=args.candidate_context_fusion_config,
+        candidate_context_auxiliary_hwr_checkpoint=args.candidate_context_auxiliary_hwr_checkpoint,
         allow_posthoc_shadow=args.allow_posthoc_shadow,
     )
     results = [runtime.infer(row) for row in _load_inputs(input_path)]

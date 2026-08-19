@@ -1,0 +1,79 @@
+{
+  "schema": "aiflow-raw-candidate-context-fusion-selection/v1",
+  "generated_at": "2026-08-19T14:51:15.9909980Z",
+  "status": "development_only_posthoc_shadow",
+  "dataset": {
+    "formulas": 96,
+    "writers": 7,
+    "dataset_info_sha256": "03dfc7d65cf39b66410198e0410414f73398ec968bac3cd3c73fe26ce699cb3f",
+    "formulas_sha256": "aaa749b96faa4be289dcc433f4debc17cdab618529ef8443800599b9c980a401",
+    "ownership_sha256": "2b466b35cedfa9f9d3ed4f965ef36884cb0eab0791466b50524e906b5f0647df"
+  },
+  "protocol": {
+    "fit": "first 47 accepted ownership formulas for grouping and partition ranker",
+    "test": "subsequent 49 accepted ownership formulas",
+    "candidate_fusion_training": "auxiliary HWR head trained on the current 96 ownership formulas",
+    "independent_acceptance": false
+  },
+  "pipeline": [
+    "exact-cover stroke partition",
+    "frozen 372-class HWR Top-5",
+    "old/new HWR probability fusion at 0.4:0.6",
+    "reorder only the original Top-5 candidate set",
+    "masked-context, layout, semantic, sequence, and syntax finalizer",
+    "singleton slash/times rescue only within the original Top-5"
+  ],
+  "scores": {
+    "grouping_exact": {"count": 48, "total": 49, "rate": 0.9795918367346939},
+    "raw_hwr_formula_exact": {"count": 15, "total": 49, "rate": 0.30612244897959184},
+    "selected_finalizer_baseline": {"count": 38, "total": 49, "rate": 0.7755102040816326},
+    "candidate_context_fusion_final": {"count": 40, "total": 49, "rate": 0.8163265306122449},
+    "original_top5_formula_oracle": {"count": 41, "total": 49, "rate": 0.8367346938775511}
+  },
+  "comparison": {
+    "improved_formula_ids": ["aiflow_0049", "aiflow_0078"],
+    "regressed_formula_ids": [],
+    "exact_delta": 2,
+    "new_tokens": 0,
+    "deleted_glyphs": 0,
+    "grouping_mutations": 0
+  },
+  "remaining_failures": {
+    "count": 9,
+    "grouping_failure": ["aiflow_0010"],
+    "truth_outside_original_top5": [
+      "aiflow_0004",
+      "aiflow_0046",
+      "aiflow_0052",
+      "aiflow_0056",
+      "aiflow_0058",
+      "aiflow_0061",
+      "aiflow_0064"
+    ],
+    "unresolved_homograph_without_formula_context": ["aiflow_0072"]
+  },
+  "contracts": {
+    "all_strokes_exactly_once": true,
+    "target_label_or_glyph_count_input": false,
+    "original_top5_candidate_set_preserved": true,
+    "arithmetic_solver": false,
+    "product_default_enabled": false
+  },
+  "raw_runtime_validation": {
+    "input_valid_formulas": 159,
+    "chronological_test_formula_exact": {"count": 40, "total": 49, "rate": 0.8163265306122449},
+    "all_strokes_exactly_once": true,
+    "all_inserted_or_deleted_glyphs_zero": true,
+    "all_product_defaults_disabled": true
+  },
+  "limits": [
+    "the 49-formula set was repeatedly inspected while selecting this posthoc shadow layer",
+    "the auxiliary HWR head overlaps all current 96 formulas and is not independent acceptance evidence",
+    "a single-glyph x/times homograph has no formula context and remains unresolved",
+    "fresh commercial project-owned writer/formula-disjoint acceptance is required before product default"
+  ],
+  "source_probe": {
+    "path": "evaluation_evidence.json",
+    "sha256": "c74cd704e9e0f73be6d3ec81d144f04080d0f8908b0fdbbcffa4e34e519c3904"
+  }
+}
