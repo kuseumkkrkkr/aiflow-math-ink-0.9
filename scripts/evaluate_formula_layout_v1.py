@@ -18,7 +18,9 @@ from xml.etree import ElementTree as ET
 
 from character_tensor_v1 import _json_lines
 from evaluate_48hz_prefix_v1 import _sha256
-from formula_layout_v1 import STRUCTURAL, infer_formula_layout
+from formula_layout_v1 import (
+    STRUCTURAL, infer_formula_layout, selected_layout_evidence_rows,
+)
 from formula_script_network_v1 import NeuralScriptPredictor
 
 
@@ -518,6 +520,7 @@ def main() -> int:
     parser.add_argument("--crohme-root", type=Path)
     parser.add_argument("--script-layout-checkpoint", type=Path)
     parser.add_argument("--owned-relation-acceptance", type=Path)
+    parser.add_argument("--promote-finalized-layout-evidence", action="store_true")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
@@ -535,6 +538,11 @@ def main() -> int:
     )
     if finalized and set(finalized) != {str(row["record_id"]) for row in direct}:
         raise ValueError("direct finalized prediction coverage mismatch")
+    evidence_audits = {}
+    if args.promote_finalized_layout_evidence:
+        direct, evidence_audits["direct"] = selected_layout_evidence_rows(
+            direct, finalized,
+        )
     acceptance = _owned_relation_acceptance(args.owned_relation_acceptance)
     relation_formula_ids = frozenset(
         str(row["formula_id"]) for row in (acceptance or {}).get("formulas", [])
@@ -545,6 +553,10 @@ def main() -> int:
             "input": "immutable symbol boxes plus HWR Top-5",
             "output": "geometry-derived order and spatial relation graph",
             "grouping_mutations": 0, "threshold_selection": "none",
+            **(
+                {"selected_finalized_layout_evidence": evidence_audits}
+                if args.promote_finalized_layout_evidence else {}
+            ),
         },
         "direct": {
             "metrics": _order_metrics(direct, finalized, script_predictor),
@@ -580,6 +592,10 @@ def main() -> int:
             str(row["record_id"]) for row in crohme
         }:
             raise ValueError("CROHME baseline prediction coverage mismatch")
+        if args.promote_finalized_layout_evidence:
+            crohme, evidence_audits["crohme"] = selected_layout_evidence_rows(
+                crohme, crohme_finalized,
+            )
         report["crohme_noncommercial"] = {
             "tracegroup_order_proxy": _order_metrics(
                 crohme, crohme_finalized, script_predictor

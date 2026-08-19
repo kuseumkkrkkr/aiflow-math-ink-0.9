@@ -86,6 +86,46 @@ def _scores(row: dict) -> dict[str, float]:
     return dict(zip(candidates, probabilities, strict=True))
 
 
+def selected_layout_evidence_rows(
+    rows: list[dict], predictions: dict[str, str],
+) -> tuple[list[dict], dict]:
+    """Copy upstream finalized tokens into layout-only semantic evidence."""
+    input_ids = {str(row.get("record_id", "")) for row in rows}
+    if "" in input_ids or len(input_ids) != len(rows) or set(predictions) != input_ids:
+        raise ValueError("selected layout evidence prediction coverage mismatch")
+    output = []
+    candidate_extensions = selected_semantic_promotions = 0
+    for source in rows:
+        row = {**source}
+        record_id = str(row["record_id"])
+        candidates = [str(value) for value in row.get("final_topk") or []]
+        probabilities = [float(value) for value in row.get("final_topk_probabilities") or []]
+        if not candidates or len(candidates) != len(probabilities):
+            raise ValueError(f"invalid selected layout candidates for {record_id}")
+        token = str(predictions[record_id])
+        if token not in candidates:
+            candidates.append(token)
+            probabilities.append(1.0)
+            candidate_extensions += 1
+            selected_semantic_promotions += 1
+        else:
+            selected_index = candidates.index(token)
+            if probabilities[selected_index] < 1.0:
+                probabilities[selected_index] = 1.0
+                selected_semantic_promotions += 1
+        row["final_topk"] = candidates
+        row["final_topk_probabilities"] = probabilities
+        output.append(row)
+    return output, {
+        "candidate_extensions": candidate_extensions,
+        "candidate_extension_policy": "upstream finalized token only",
+        "selected_semantic_promotions": selected_semantic_promotions,
+        "selected_semantic_policy": (
+            "upstream finalized token receives layout-only unit evidence"
+        ),
+    }
+
+
 def _reference_height(boxes: list[dict[str, float]]) -> float:
     maximum = max(box["height"] for box in boxes)
     body = [box["height"] for box in boxes if box["height"] >= maximum * 0.25]

@@ -419,3 +419,20 @@ CROHME 비상업 반복 진단은 선택된 기존 레이아웃 기준을 그대
 - 기본 OFF 호환 runtime: `47033bd2eefe2abf25d2958824974d5a69c46e704e62cf24f516e8625e62c0af`
 - 공식 배치 shadow runtime: `9f931fe676cb900553a03fd7019e3b69517fd7fcab7c146ba1d2090aecf21996`
 - 공식 배치 평가 manifest: `5bfe4cc2ec346c833f93a3dfcd0ad8ed815cc64a7b17a3513e611669e24c88c5`
+
+## 2026-08-20 공식 배치 wrapper 직접 CROHME 재생
+
+앞 절의 CROHME 552/984와 225/984는 레이아웃 본체의 기존 후보 확률 기준이었다. 실제 raw wrapper는 상류 확정 토큰을 레이아웃 전용 의미 증거 1.0으로 복사하므로, 그 변환까지 동일하게 적용해 direct와 CROHME를 다시 재생했다. 확정 토큰 밖의 정답, writer, 식 길이, 산술 결과는 사용하지 않았다.
+
+| 비상업 반복 진단 | 기존 후보 증거 | 실제 wrapper 증거 | 변화 |
+|---|---:|---:|---:|
+| CROHME 관계식 exact | 552/984 | **556/984** | +4 |
+| CROHME 관계+문자 exact | 225/984 | **226/984** | +1 |
+| CROHME 관계 micro F1 | 0.775003 | **0.776314** | +0.001311 |
+
+direct 읽기 순서는 94/95로 같았고, 관계식 1건을 제외한 94개 평면식의 허위 구조 edge는 0건이었다. 프로젝트 소유 관계 oracle도 3/3 exact를 유지했다. 공용 증거 함수로 추출한 뒤 현재 159식 runtime을 다시 생성한 SHA-256도 기존 `9f931fe676cb900553a03fd7019e3b69517fd7fcab7c146ba1d2090aecf21996`과 완전히 같았다.
+
+따라서 wrapper 증거 승격은 세 고정 지표가 모두 비회귀일 때만 통과하도록 평가기에 고정했다. 다만 CROHME는 CC BY-NC 반복 진단이므로 제품 검증이나 학습 자료가 아니며, 결론은 계속 `retain_opt_in_shadow_only_not_product_default`다.
+
+- wrapper 직접 레이아웃 평가: `0da5ac483f804e9e7a4ca792a338843d3858bd59a9528f3b281b91ef59634f95`
+- 현재 159식 + CROHME 비회귀 선택 게이트: `56a2f4c02dd05a00e4a0063e539d7c15dca0a54bb46921e09eadd8568398c3a7`

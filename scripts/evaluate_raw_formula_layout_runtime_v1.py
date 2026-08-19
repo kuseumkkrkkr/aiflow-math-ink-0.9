@@ -136,7 +136,7 @@ def _score(predictions: dict[str, str], truth: dict[str, str], ids: list[str]) -
 
 def evaluate(
     truth_path: Path, baseline_path: Path, layout_path: Path,
-    crohme_layout_path: Path,
+    crohme_layout_path: Path, crohme_layout_baseline_path: Path | None = None,
 ) -> dict[str, Any]:
     paths = {
         "truth": _d_file(truth_path, "project truth"),
@@ -146,6 +146,10 @@ def evaluate(
             crohme_layout_path, "CROHME layout evaluation",
         ),
     }
+    if crohme_layout_baseline_path is not None:
+        paths["crohme_layout_baseline_evaluation"] = _d_file(
+            crohme_layout_baseline_path, "CROHME layout baseline evaluation",
+        )
     truth, truth_inventory = _truth(paths["truth"])
     expected_ids = set(truth)
     baseline_payload, baseline = _runtime(paths["baseline_runtime"], expected_ids)
@@ -231,6 +235,37 @@ def evaluate(
     ):
         raise ValueError("CROHME layout evidence boundary mismatch")
     relation = crohme["crohme_noncommercial"]["relation_graph"]
+    crohme_delta = None
+    if "crohme_layout_baseline_evaluation" in paths:
+        crohme_baseline = _json(paths["crohme_layout_baseline_evaluation"])
+        if (
+            crohme_baseline.get("schema") != "aiflow-formula-layout-evaluation/v1"
+            or crohme_baseline.get("crohme_noncommercial", {}).get(
+                "product_validation"
+            ) is not False
+        ):
+            raise ValueError("CROHME layout baseline evidence boundary mismatch")
+        baseline_relation = crohme_baseline["crohme_noncommercial"]["relation_graph"]
+        crohme_delta = {
+            "relation_formula_exact_count": (
+                int(relation["formula_exact_count"])
+                - int(baseline_relation["formula_exact_count"])
+            ),
+            "relation_and_context_character_formula_exact_count": (
+                int(relation["relation_and_character_formula_exact"][
+                    "context_finalized_count"
+                ])
+                - int(baseline_relation["relation_and_character_formula_exact"][
+                    "context_finalized_count"
+                ])
+            ),
+            "relation_micro_f1": (
+                float(relation["micro"]["f1"])
+                - float(baseline_relation["micro"]["f1"])
+            ),
+        }
+        if any(value < 0 for value in crohme_delta.values()):
+            raise ValueError(f"CROHME wrapper regression: {crohme_delta}")
 
     return {
         "schema": SCHEMA,
@@ -277,6 +312,10 @@ def evaluate(
             "relation_micro": relation["micro"],
             "license_boundary": relation["license_boundary"],
         },
+        **(
+            {"crohme_wrapper_delta_vs_unpromoted_baseline": crohme_delta}
+            if crohme_delta is not None else {}
+        ),
         "contracts": {
             "truth_not_read_by_runtime": True,
             "upstream_finalized_candidates_only": True,
@@ -304,6 +343,7 @@ def main() -> int:
     parser.add_argument("--baseline", type=Path, required=True)
     parser.add_argument("--layout", type=Path, required=True)
     parser.add_argument("--crohme-layout-evaluation", type=Path, required=True)
+    parser.add_argument("--crohme-layout-baseline-evaluation", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     output = args.output.expanduser().resolve()
@@ -311,6 +351,7 @@ def main() -> int:
         parser.error("--output must be a new file on D:")
     report = evaluate(
         args.truth, args.baseline, args.layout, args.crohme_layout_evaluation,
+        args.crohme_layout_baseline_evaluation,
     )
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(

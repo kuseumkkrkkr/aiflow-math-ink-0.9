@@ -57,7 +57,7 @@ from evaluate_partition_context_ranker_v1 import (
     _validate_repeat_merge_configuration,
 )
 from finalize_formula_context_v1 import DEFAULT_CONTEXT, OwnedFormulaContextFinalizer
-from formula_layout_v1 import finalize_formula_outputs
+from formula_layout_v1 import finalize_formula_outputs, selected_layout_evidence_rows
 from formula_acceptance_guard_v1 import (
     apply_formula_acceptance_guard, load_configuration as load_acceptance_configuration,
 )
@@ -171,38 +171,14 @@ def _formula_layout_shadow(
     }
     if len(predictions) != len(finalized):
         raise ValueError("formula layout finalized record ids must be unique")
-    layout_rows = []
-    candidate_extensions = 0
-    selected_semantic_promotions = 0
-    for source in runtime_rows:
-        row = {**source}
-        record_id = str(row["record_id"])
-        candidates = [str(value) for value in row["final_topk"]]
-        probabilities = [float(value) for value in row["final_topk_probabilities"]]
-        token = predictions[record_id]
-        if token not in candidates:
-            candidates.append(token)
-            probabilities.append(1.0)
-            candidate_extensions += 1
-            selected_semantic_promotions += 1
-        else:
-            selected_index = candidates.index(token)
-            if probabilities[selected_index] < 1.0:
-                probabilities[selected_index] = 1.0
-                selected_semantic_promotions += 1
-        row["final_topk"] = candidates
-        row["final_topk_probabilities"] = probabilities
-        layout_rows.append(row)
+    layout_rows, evidence_audit = selected_layout_evidence_rows(runtime_rows, predictions)
     formulae, audit = finalize_formula_outputs(layout_rows, predictions)
     if len(formulae) != 1:
         raise AssertionError("raw runtime must emit exactly one layout formula")
     return formulae[0], {
         **audit,
         "enabled": True,
-        "candidate_extensions": candidate_extensions,
-        "candidate_extension_policy": "upstream finalized token only",
-        "selected_semantic_promotions": selected_semantic_promotions,
-        "selected_semantic_policy": "upstream finalized token receives layout-only unit evidence",
+        **evidence_audit,
         "feedback_into_character_model": False,
         "product_default_enabled": False,
     }
