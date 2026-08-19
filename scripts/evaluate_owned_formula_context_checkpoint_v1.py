@@ -14,7 +14,7 @@ import torch
 from character_tensor_v1 import _json_lines
 from evaluate_48hz_prefix_v1 import DEFAULT_PRODUCT, _sha256
 from evaluate_homograph_context_reranker_v1 import _metrics
-from semantic_equation_guard_v1 import apply_semantic_equation_guard
+from semantic_equation_guard_v2 import apply_semantic_equation_guard_v2
 from semantic_fence_guard_v1 import apply_semantic_fence_guard
 from semantic_infix_guard_v1 import apply_semantic_infix_guard
 import train_masked_context_reranker_v1 as masked
@@ -111,15 +111,18 @@ def main() -> int:
     direct_context, direct_runtime = decide_owned_formula_rows(
         model, contract, payload, direct_rows, device, args.batch_size
     )
-    direct_equation, direct_equation_audit = apply_semantic_equation_guard(
-        direct_rows, direct_context
+    probability_ratio_floor = float(
+        payload["configuration"]["candidate_probability_ratio_floor"]
+    )
+    direct_equation, direct_equation_audit = apply_semantic_equation_guard_v2(
+        direct_rows, direct_context, probability_ratio_floor
     )
     direct_fence, direct_fence_audit = apply_semantic_fence_guard(
         direct_rows, direct_equation
     )
     direct_predictions, direct_infix_audit = apply_semantic_infix_guard(
         direct_rows, direct_fence,
-        float(payload["configuration"]["candidate_probability_ratio_floor"]),
+        probability_ratio_floor,
     )
     if predictions_output is not None:
         predictions_output.parent.mkdir(parents=True, exist_ok=True)
@@ -130,7 +133,7 @@ def main() -> int:
         "training_performed": False,
         "runtime_pipeline": [
             "owned_formula_context_r6",
-            "semantic_equation_guard_v1",
+            "semantic_equation_guard_v2",
             "semantic_fence_guard_v1",
             "semantic_infix_guard_v1",
         ],
@@ -160,15 +163,15 @@ def main() -> int:
         crohme_context, crohme_runtime = decide_owned_formula_rows(
             model, contract, payload, crohme_rows, device, args.batch_size
         )
-        crohme_equation, crohme_equation_audit = apply_semantic_equation_guard(
-            crohme_rows, crohme_context
+        crohme_equation, crohme_equation_audit = apply_semantic_equation_guard_v2(
+            crohme_rows, crohme_context, probability_ratio_floor
         )
         crohme_fence, crohme_fence_audit = apply_semantic_fence_guard(
             crohme_rows, crohme_equation
         )
         crohme_predictions, crohme_infix_audit = apply_semantic_infix_guard(
             crohme_rows, crohme_fence,
-            float(payload["configuration"]["candidate_probability_ratio_floor"]),
+            probability_ratio_floor,
         )
         report["crohme"] = {
             "candidate_sha256": _sha256(crohme_path),

@@ -20,7 +20,7 @@ import torch
 
 from character_tensor_v1 import _json_lines
 from evaluate_48hz_prefix_v1 import DEFAULT_PRODUCT, _sha256
-from semantic_equation_guard_v1 import apply_semantic_equation_guard
+from semantic_equation_guard_v2 import apply_semantic_equation_guard_v2
 from semantic_fence_guard_v1 import apply_semantic_fence_guard
 from semantic_infix_guard_v1 import apply_semantic_infix_guard
 import train_masked_context_reranker_v1 as masked
@@ -91,7 +91,7 @@ def _decision_metadata(
     elif fence_token != equation_token:
         source = "semantic_fence_guard"
     elif equation_token != context_token:
-        source = "semantic_equation_guard"
+        source = "semantic_equation_guard_v2"
     elif context_token != hwr:
         source = "owned_formula_context"
     else:
@@ -137,15 +137,18 @@ class OwnedFormulaContextFinalizer:
             self.device, self.batch_size,
         )
         if self.semantic_guards:
-            equation_predictions, equation_audit = apply_semantic_equation_guard(
-                runtime_rows, context_predictions
+            probability_ratio_floor = float(
+                self.payload["configuration"]["candidate_probability_ratio_floor"]
+            )
+            equation_predictions, equation_audit = apply_semantic_equation_guard_v2(
+                runtime_rows, context_predictions, probability_ratio_floor
             )
             fence_predictions, fence_audit = apply_semantic_fence_guard(
                 runtime_rows, equation_predictions
             )
             predictions, infix_audit = apply_semantic_infix_guard(
                 runtime_rows, fence_predictions,
-                float(self.payload["configuration"]["candidate_probability_ratio_floor"]),
+                probability_ratio_floor,
             )
             semantic_audit = {
                 "enabled": True,
@@ -191,7 +194,7 @@ class OwnedFormulaContextFinalizer:
             "hwr_checkpoint_sha256": self.hwr_checkpoint_sha256,
             "pipeline": ["owned_formula_context_r6"] + (
                 [
-                    "semantic_equation_guard_v1",
+                    "semantic_equation_guard_v2",
                     "semantic_fence_guard_v1",
                     "semantic_infix_guard_v1",
                 ]
