@@ -13,6 +13,11 @@ from dual_straight_one_slot_rescue_v1 import (
     apply_dual_straight_one_slot_rescue,
     validate_configuration as validate_dual_one_configuration,
 )
+from formula_role_typo_rescue_v1 import (
+    DEFAULT_CONFIGURATION as FORMULA_ROLE_TYPO_CONFIGURATION,
+    apply_formula_role_typo_rescue,
+    validate_configuration as validate_formula_role_typo_configuration,
+)
 from operator_cross_slot_rescue_v1 import (
     DEFAULT_CONFIGURATION as OPERATOR_CROSS_CONFIGURATION,
     apply_operator_cross_slot_rescue,
@@ -34,12 +39,14 @@ STAGE_ORDER = (
     "unmatched_fence_operand",
     "operator_cross_slot",
     "dual_straight_one_slot",
+    "formula_role_typo",
 )
 DEFAULT_CONFIGURATION = {
     "stage_order": list(STAGE_ORDER),
     "unmatched_fence_operand": UNMATCHED_FENCE_CONFIGURATION,
     "operator_cross_slot": OPERATOR_CROSS_CONFIGURATION,
     "dual_straight_one_slot": DUAL_ONE_CONFIGURATION,
+    "formula_role_typo": FORMULA_ROLE_TYPO_CONFIGURATION,
 }
 
 
@@ -59,6 +66,9 @@ def validate_configuration(configuration: dict) -> dict:
         ),
         "dual_straight_one_slot": validate_dual_one_configuration(
             configuration["dual_straight_one_slot"]
+        ),
+        "formula_role_typo": validate_formula_role_typo_configuration(
+            configuration["formula_role_typo"]
         ),
     }
 
@@ -97,6 +107,7 @@ def apply_formula_placement_rescue(
         ),
         ("operator_cross_slot", apply_operator_cross_slot_rescue),
         ("dual_straight_one_slot", apply_dual_straight_one_slot_rescue),
+        ("formula_role_typo", apply_formula_role_typo_rescue),
     )
     changed_record_ids = set()
     for name, apply_stage in stages:
@@ -180,6 +191,7 @@ def _self_test() -> None:
         "unmatched_fence_operand": 0,
         "operator_cross_slot": 0,
         "dual_straight_one_slot": 0,
+        "formula_role_typo": 0,
     }
     assert not audit["arithmetic_evaluation"]
 

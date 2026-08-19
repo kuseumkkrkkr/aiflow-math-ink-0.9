@@ -157,3 +157,39 @@ python scripts\raw_formula_context_runtime_v1.py `
   --formula-placement-config artifacts\formula_placement_rescue_20260819_r1_shadow\formula_placement_rescue_runtime_config.json `
   --straight-equality-config artifacts\straight_equality_slot_rescue_20260819_r1_shadow\straight_equality_slot_rescue_runtime_config.json `
 ```
+
+## 2026-08-20 공식 역할·오탈자 보정 루프
+
+이 절은 바로 위의 `138/159` 결과를 대체한다. 기존 masked-attention 문맥 모델의 출력을 그대로 확정하지 않고, product-fused HWR Top-20 안에서 식 역할과 타점 기하가 동시에 맞을 때만 다시 고르는 `formula_role_typo_rescue_v1` 단계를 공식 배치 레이어에 추가했다. 새 문자를 만들거나 순서를 바꾸는 신경망이 아니라, 이미 학습된 HWR·문맥 후보를 보수적으로 재판정하는 오탈자 보정층이다.
+
+허용한 경우는 다음뿐이다.
+
+- `f`, `g`, `h` 후보가 뒤의 `(`와 함께 함수호출 머리를 이루는 경우
+- `(`와 `)` 사이 단일 `x`, `y`, `z` 후보
+- 이항연산자 앞에서 fused HWR Top-1이 숫자인 경우의 문맥 오버라이드 철회
+- 수직 1획 `1`, 2획 십자형 `+`, 두 후보가 붙어 있는 `+1` 쌍
+- 균형 잡힌 함수호출 좌변 뒤 `= 변수`의 fused 알파벳 Top-1
+- 숫자 양옆의 넓고 수평인 2획 `=` 후보
+
+식의 계산 결과는 사용하지 않았다. 예를 들어 `30 ÷ 6 = 5`에서 가운데 글자를 `0`으로 고르는 산술 역산은 금지되어 그대로 남겼다.
+
+| 평가 집합 | 이전 결과 | 공식 역할 보정 후 |
+|---|---:|---:|
+| 시간순 ownership 49식 | 43/49 (87.76%) | **46/49 (93.88%)** |
+| accepted ownership 96식 | 89/96 (92.71%) | **92/96 (95.83%)** |
+| writer_012 제외 public 110식 | 103/110 (93.64%) | **106/110 (96.36%)** |
+| writer_012 휴대폰 재생 49식 | 35/49 (71.43%) | **41/49 (83.67%)** |
+| 전체 유효 159식 | 138/159 (86.79%) | **147/159 (92.45%)** |
+
+- 개선 9식: `aiflow_0004`, `aiflow_0056`, `aiflow_0061`, `aiflow_0095`, `aiflow_0100`, `aiflow_0105`, `aiflow_0110`, `aiflow_0111`, `aiflow_0116`
+- 회귀: 0식
+- 공식 역할 보정: 8식·12글자, 직선형 등호 보정: 1식·1글자
+- 계약: 모든 획 정확히 1회 사용, 정답·writer·목표 글자 수 입력 없음, Top-20 밖 문자 생성 없음, 삽입·삭제·재배치 없음, 산술 계산 없음, 제품 기본값 OFF
+- 시간순 49식 evaluator SHA-256: `58b64880775040bc1379ce853288fdebf490813f72c68bf30b1ad1d789a6d33b`
+- 최종 159식 출력 SHA-256: `37e2829c7134f758d16d1752ae9754088c2d5058127c09e562c5fe8253ff22e3`
+
+CROHME 반복 비상업 진단 984식에서는 문자 Top-1이 `7516/9535 → 7555/9535`, 식 exact가 `288/984 → 295/984`로 증가했고 문자·식 회귀는 모두 0건이었다. 이 결과는 제품 검증이나 상업 승격 근거가 아니다.
+
+남은 12식은 그룹 수 불일치 3식(`aiflow_0038`, `aiflow_0101`, `aiflow_0109`), 현재 Top-20 정답 후보 부재 3식(`aiflow_0036`, `aiflow_0064`, `aiflow_0104`), 문맥이 없는 단일 문자 4식(`aiflow_0032`, `aiflow_0044`, `aiflow_0046`, `aiflow_0072`), 산술 역산 없이는 안전하게 못 고르는 숫자 혼동 2식(`aiflow_0023`, `aiflow_0113`)이다.
+
+이 결과도 현재 159식을 관찰해 임계값을 정한 posthoc shadow다. 상용 승격 조건은 새 writer/formula-disjoint acceptance에서 동일 개선과 비회귀를 재현하는 것이다.

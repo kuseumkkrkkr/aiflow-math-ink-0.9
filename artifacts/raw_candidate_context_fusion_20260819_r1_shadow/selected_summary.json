@@ -1,6 +1,6 @@
 {
   "schema": "aiflow-raw-candidate-context-fusion-selection/v1",
-  "generated_at": "2026-08-19T16:52:52.6940799Z",
+  "generated_at": "2026-08-19T17:13:00Z",
   "status": "development_only_posthoc_shadow",
   "dataset": {
     "formulas": 96,
@@ -26,7 +26,7 @@
     "singleton slash/times rescue only within the original Top-5",
     "numeric operand rescue only from the baseline and auxiliary Top-5 union",
     "unique minimum numeric-syntax repair only from the product-fused Top-10 union",
-    "candidate-preserving Top-20 formula placement and straight-equality guards"
+    "candidate-preserving Top-20 formula-role typo, placement, and straight-equality guards"
   ],
   "scores": {
     "grouping_exact": {"count": 49, "total": 49, "rate": 1.0},
@@ -39,20 +39,24 @@
     "dual_hwr_top5_union_formula_oracle": {"count": 47, "total": 49, "rate": 0.9591836734693877},
     "product_fused_top10_union_formula_oracle": {"count": 48, "total": 49, "rate": 0.9795918367346939},
     "product_fused_top20_union_formula_oracle": {"count": 48, "total": 49, "rate": 0.9795918367346939},
-    "formula_placement_final": {"count": 43, "total": 49, "rate": 0.8775510204081632},
-    "straight_equality_final": {"count": 43, "total": 49, "rate": 0.8775510204081632}
+    "formula_placement_final": {"count": 45, "total": 49, "rate": 0.9183673469387755},
+    "straight_equality_final": {"count": 46, "total": 49, "rate": 0.9387755102040817}
   },
   "comparison": {
-    "improved_formula_ids": ["aiflow_0010", "aiflow_0049", "aiflow_0052", "aiflow_0058", "aiflow_0078"],
+    "improved_formula_ids": [
+      "aiflow_0004", "aiflow_0010", "aiflow_0049", "aiflow_0052",
+      "aiflow_0056", "aiflow_0058", "aiflow_0061", "aiflow_0078"
+    ],
     "regressed_formula_ids": [],
-    "exact_delta": 5,
+    "exact_delta": 8,
     "baseline_top5_expansions": 1,
     "tokens_outside_dual_hwr_union": 0,
     "deleted_glyphs": 0,
     "relation_merge_grouping_changes": 1,
     "cross_merge_grouping_changes": 0,
-    "formula_placement_changes": 0,
-    "straight_equality_changes": 0,
+    "formula_placement_changes": 2,
+    "formula_role_typo_changed_glyphs": 2,
+    "straight_equality_changes": 1,
     "relation_merge_exact_cover_coarsening_only": true,
     "cross_merge_exact_cover_coarsening_only": true,
     "cross_merge_merged_hwr_and_context_token": "x",
@@ -63,16 +67,10 @@
     "layout_mutations": 0
   },
   "remaining_failures": {
-    "count": 6,
+    "count": 3,
     "grouping_failure": [],
-    "truth_outside_product_fused_top10_union": ["aiflow_0064"],
-    "unresolved_inside_product_fused_top10_union": [
-      "aiflow_0004",
-      "aiflow_0046",
-      "aiflow_0056",
-      "aiflow_0061",
-      "aiflow_0072"
-    ]
+    "truth_outside_product_fused_top20_union": ["aiflow_0064"],
+    "unresolved_inside_product_fused_top20_union": ["aiflow_0046", "aiflow_0072"]
   },
   "contracts": {
     "all_strokes_exactly_once": true,
@@ -94,6 +92,8 @@
     "wide_numeric_minimum_digit_probability_ratio": 0.005,
     "wide_numeric_equality_replacement": false,
     "formula_placement_candidate_contract": "product_fused_top20",
+    "formula_role_typo_geometry_and_role_gated": true,
+    "formula_role_typo_target_input_disabled": true,
     "formula_placement_inserted_or_deleted_glyphs": 0,
     "straight_equality_maximum_changes_per_formula": 1,
     "dual_numeric_operator_relation_or_fence_mutations": 0,
@@ -110,6 +110,16 @@
     "all_inserted_or_deleted_glyphs_zero_required": true,
     "all_product_defaults_disabled_required": true
   },
+  "crohme_repeated_noncommercial_diagnostic": {
+    "formulas": 984,
+    "baseline_formula_exact_count": 288,
+    "final_formula_exact_count": 295,
+    "formula_regressed": 0,
+    "baseline_character_top1_count": 7516,
+    "final_character_top1_count": 7555,
+    "glyph_regressed": 0,
+    "product_validation": false
+  },
   "limits": [
     "the 49-formula set was repeatedly inspected while selecting this posthoc shadow layer",
     "the auxiliary HWR head overlaps all current 96 formulas and is not independent acceptance evidence",
@@ -118,11 +128,12 @@
     "the relation merge thresholds were selected after inspecting the remaining grouping failure",
     "the cross merge thresholds were selected after inspecting writer_012 phone replay failures",
     "the Top-20 placement guards were previously selected on inspected project-owned development data",
+    "the formula-role typo and expanded straight-equality guards were selected after inspecting all current 159 formulas",
     "a single-glyph x/times homograph has no formula context and remains unresolved",
     "fresh commercial project-owned writer/formula-disjoint acceptance is required before product default"
   ],
   "source_probe": {
     "path": "evaluation_evidence.json",
-    "sha256": "29706b9b2ca62cc2512a53f268f353547e479efc571635bb8ecb21e5def876d1"
+    "sha256": "d5c2e2da4e4bb6786065b416d4db05752bafafd6bf3a3395bf03334e34b7f3f1"
   }
 }

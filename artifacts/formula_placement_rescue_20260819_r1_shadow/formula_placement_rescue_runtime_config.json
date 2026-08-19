@@ -1,7 +1,7 @@
 {
   "schema": "aiflow-formula-placement-rescue-runtime-config/v1",
   "rescue_schema": "aiflow-formula-placement-rescue/v1",
-  "generated_at": "2026-08-19T12:42:50.987824+00:00",
+  "generated_at": "2026-08-19T17:13:00Z",
   "status": "shadow_runtime_only",
   "runtime_admitted": false,
   "product_default_admitted": false,
@@ -9,7 +9,8 @@
     "stage_order": [
       "unmatched_fence_operand",
       "operator_cross_slot",
-      "dual_straight_one_slot"
+      "dual_straight_one_slot",
+      "formula_role_typo"
     ],
     "unmatched_fence_operand": {
       "candidate_width": 20,
@@ -62,14 +63,39 @@
       "minimum_absolute_vertical_direction": 0.9,
       "maximum_relative_width": 0.25,
       "minimum_best_digit_probability_ratio": 10.0
+    },
+    "formula_role_typo": {
+      "candidate_width": 20,
+      "auxiliary_weight": 0.6,
+      "allowed_auxiliary_policies": [
+        "current_expanded_writer_loo_probability_fusion",
+        "old_new_product_probability_fusion"
+      ],
+      "function_tokens": ["f", "g", "h"],
+      "function_candidate_maximum_rank": 3,
+      "parenthesized_variables": ["x", "y", "z"],
+      "parenthesized_variable_maximum_rank": 4,
+      "cross_plus_candidate_maximum_rank": 4,
+      "cross_plus_required_stroke_count": 2,
+      "cross_plus_maximum_absolute_aspect_log": 0.6,
+      "cross_plus_minimum_path_over_diagonal": 1.1,
+      "cross_plus_maximum_path_over_diagonal": 2.0,
+      "vertical_one_candidate_maximum_rank": 4,
+      "vertical_one_required_stroke_count": 1,
+      "vertical_one_maximum_aspect_log": -1.5,
+      "vertical_one_maximum_path_over_diagonal": 1.15,
+      "vertical_one_minimum_absolute_direction_y": 0.9,
+      "vertical_one_maximum_relative_width": 0.25,
+      "digit_before_binary_top1_only": true,
+      "function_rhs_top1_only": true
     }
   },
   "gate": {
     "shadow_runtime_admitted": true,
     "product_default_admitted": false,
     "criteria": {
-      "direct_three_formula_improvements": true,
-      "direct_regressions_zero": true,
+      "inspected_159_formula_exact_improved_from_138_to_146_before_equality": true,
+      "inspected_159_formula_regressions_zero": true,
       "crohme_repeated_diagnostic_regressions_zero": true,
       "candidate_and_layout_contract_passed": true,
       "stage_replay_passed": true
@@ -77,7 +103,10 @@
     "promotion_requirement": "untouched project-owned writer-disjoint and formula-disjoint commercial acceptance evidence"
   },
   "evidence": {
-    "path": "reports/FORMULA_PLACEMENT_RESCUE_INTEGRATION_20260819.md",
-    "evaluation_sha256": "7b5f27618aad0a96f9064497da6cd55e343a3979c480755c630b6730ae3f8213"
+    "path": "reports/RAW_STROKE_FORMULA_CONTEXT_LOOP_20260819.md",
+    "protocol": "posthoc replay over all 159 currently valid formulas",
+    "baseline_formula_exact_count": 138,
+    "challenger_before_equality_formula_exact_count": 146,
+    "regressed_formula_ids": []
   }
 }

@@ -26,11 +26,11 @@ DEFAULT_CONFIGURATION = {
         "old_new_product_probability_fusion",
     ],
     "replacement": "=",
-    "maximum_candidate_rank": 3,
-    "minimum_candidate_probability": 0.1,
+    "maximum_candidate_rank": 5,
+    "minimum_candidate_probability": 0.04,
     "required_stroke_count": 2,
     "minimum_aspect_log": 0.8,
-    "maximum_path_over_diagonal": 1.2,
+    "maximum_path_over_diagonal": 1.55,
     "maximum_absolute_direction_y": 0.2,
     "minimum_formula_length": 3,
     "maximum_formula_length": 64,
@@ -304,7 +304,7 @@ def _self_test() -> None:
     output, audit = apply_straight_equality_slot_rescue(baseline, candidates)
     assert [row["finalized_top1"] for row in output] == ["7", "=", "1"]
     assert audit["changed_glyphs"] == 1 and audit["arithmetic_evaluation"] is False
-    candidates[1]["geometry"]["path_over_diag"] = 1.3
+    candidates[1]["geometry"]["path_over_diag"] = 1.6
     output, audit = apply_straight_equality_slot_rescue(baseline, candidates)
     assert [row["finalized_top1"] for row in output] == ["7", r"\approx", "1"]
     assert audit["changed_glyphs"] == 0

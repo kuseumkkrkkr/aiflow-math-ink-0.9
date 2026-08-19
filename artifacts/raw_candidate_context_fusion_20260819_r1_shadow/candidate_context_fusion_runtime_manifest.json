@@ -1,20 +1,20 @@
 {
   "schema": "aiflow-raw-candidate-context-fusion-runtime-manifest/v1",
-  "generated_at": "2026-08-19T16:52:52.6940799Z",
+  "generated_at": "2026-08-19T17:13:00Z",
   "status": "development_only_posthoc_shadow",
   "shadow_runtime_admitted": true,
   "product_default_admitted": false,
   "configuration": {
     "path": "artifacts/raw_candidate_context_fusion_20260819_r1_shadow/candidate_context_fusion_runtime_config.json",
-    "sha256": "d0d65535d6f67f2b0e258e285601a414ea0ae98749f6d069413502f3facf8803"
+    "sha256": "134e1b8c11fd0d0c60ce88a3d647504f08805ba159c6442a8482d9f18d569e60"
   },
   "selected_summary": {
     "path": "artifacts/raw_candidate_context_fusion_20260819_r1_shadow/selected_summary.json",
-    "sha256": "50c1513d1d67ee8f1c1b7b1b56b18088aa01ffeeaa64e2463c36abafb86ec0d8"
+    "sha256": "1e3185d17b39d00b25372506db0fc57262a23f061f4067c4c12968b307a730c7"
   },
   "evaluation_evidence": {
     "path": "artifacts/raw_candidate_context_fusion_20260819_r1_shadow/evaluation_evidence.json",
-    "sha256": "29706b9b2ca62cc2512a53f268f353547e479efc571635bb8ecb21e5def876d1"
+    "sha256": "d5c2e2da4e4bb6786065b416d4db05752bafafd6bf3a3395bf03334e34b7f3f1"
   },
   "runtime_contract": {
     "restricted_context_candidates": "original frozen HWR Top-5",
@@ -30,8 +30,10 @@
     "cross_merge_changes": 11,
     "cross_merge_auxiliary_semantic_lock_changes": 1,
     "formula_placement_candidates": "product-fused HWR Top-20 candidate union under geometry and formula-role gates",
-    "formula_placement_changes": 1,
-    "straight_equality_changes": 0,
+    "formula_placement_changes": 9,
+    "formula_role_typo_changed_formulas": 8,
+    "formula_role_typo_changed_glyphs": 12,
+    "straight_equality_changes": 1,
     "singleton_shape_tokens": ["/", "\\times"],
     "dual_numeric_maximum_operand_changes": 2,
     "wide_numeric_maximum_operand_changes": 2,
@@ -44,6 +46,8 @@
     "cross_merge_exact_cover_coarsening_only": true,
     "cross_merge_candidate_preserving": true,
     "formula_placement_candidate_preserving": true,
+    "formula_role_typo_geometry_and_role_gated": true,
+    "formula_role_typo_target_input_disabled": true,
     "downstream_grouping_mutations_after_relation_merge": 0,
     "dual_numeric_operator_relation_or_fence_mutations": 0,
     "wide_numeric_non_digit_replacements": 0,
@@ -53,9 +57,12 @@
   "metrics": {
     "chronological_49": {
       "baseline_formula_exact_count": 38,
-      "challenger_formula_exact_count": 43,
-      "challenger_formula_exact": 0.8775510204081632,
-      "improved_formula_ids": ["aiflow_0010", "aiflow_0049", "aiflow_0052", "aiflow_0058", "aiflow_0078"],
+      "challenger_formula_exact_count": 46,
+      "challenger_formula_exact": 0.9387755102040817,
+      "improved_formula_ids": [
+        "aiflow_0004", "aiflow_0010", "aiflow_0049", "aiflow_0052",
+        "aiflow_0056", "aiflow_0058", "aiflow_0061", "aiflow_0078"
+      ],
       "regressed_formula_ids": [],
       "original_top5_oracle_count": 42,
       "dual_hwr_top5_union_oracle_count": 47,
@@ -63,23 +70,27 @@
     },
     "raw_runtime": {
       "formulas": 159,
-      "chronological_test_exact_count": 43,
+      "chronological_test_exact_count": 46,
       "chronological_test_total": 49,
-      "public_non_phone_exact_count": 103,
+      "public_non_phone_exact_count": 106,
       "public_non_phone_total": 110,
-      "writer_012_phone_replay_exact_count": 35,
+      "writer_012_phone_replay_exact_count": 41,
       "writer_012_phone_replay_total": 49,
-      "accepted_ownership_exact_count": 89,
+      "accepted_ownership_exact_count": 92,
       "accepted_ownership_total": 96,
-      "all_valid_prompt_exact_count": 138,
+      "all_valid_prompt_exact_count": 147,
       "all_valid_prompt_total": 159,
       "improved_over_r11_relation_runtime": [
-        "aiflow_0092", "aiflow_0093", "aiflow_0097", "aiflow_0098",
-        "aiflow_0102", "aiflow_0103", "aiflow_0112", "aiflow_0142"
+        "aiflow_0004", "aiflow_0056", "aiflow_0061", "aiflow_0092",
+        "aiflow_0093", "aiflow_0095", "aiflow_0097", "aiflow_0098",
+        "aiflow_0100", "aiflow_0102", "aiflow_0103", "aiflow_0105",
+        "aiflow_0110", "aiflow_0111", "aiflow_0112", "aiflow_0116",
+        "aiflow_0142"
       ],
       "improved_over_previous_runtime": [
-        "aiflow_0092", "aiflow_0093", "aiflow_0097", "aiflow_0098",
-        "aiflow_0102", "aiflow_0103", "aiflow_0112", "aiflow_0142"
+        "aiflow_0004", "aiflow_0056", "aiflow_0061", "aiflow_0095",
+        "aiflow_0100", "aiflow_0105", "aiflow_0110", "aiflow_0111",
+        "aiflow_0116"
       ],
       "regressed_over_previous_runtime": [],
       "all_exact_stroke_cover": true,
@@ -90,18 +101,32 @@
       "relation_merge_exact_cover_coarsening_only": true,
       "cross_merge_changes": 11,
       "cross_merge_auxiliary_semantic_lock_changes": 1,
-      "formula_placement_changes": 1,
-      "straight_equality_changes": 0,
+      "formula_placement_changes": 9,
+      "formula_role_typo_changed_formulas": 8,
+      "formula_role_typo_changed_glyphs": 12,
+      "straight_equality_changes": 1,
       "cross_merge_exact_cover_coarsening_only": true,
       "all_cross_and_placement_replacements_inside_candidate_union": true,
       "all_layout_mutations_zero": true,
       "all_product_defaults_disabled": true,
-      "output_sha256": "ac4325a05d445f4d28578de0b118ca5488f4a6aadeb102d688142bfe2a3c79a6"
+      "output_sha256": "37e2829c7134f758d16d1752ae9754088c2d5058127c09e562c5fe8253ff22e3"
+    },
+    "crohme_repeated_noncommercial": {
+      "formulas": 984,
+      "baseline_formula_exact_count": 288,
+      "final_formula_exact_count": 295,
+      "formula_regressed": 0,
+      "baseline_character_top1_count": 7516,
+      "final_character_top1_count": 7555,
+      "glyph_regressed": 0,
+      "product_validation": false,
+      "diagnostic_sha256": "c352f852cda4429a27c93e206e498f73e680c615303c3598c32b6c1704e1cc27"
     }
   },
   "code": {
     "evaluator": "scripts/evaluate_partition_context_ranker_v1.py",
     "runtime": "scripts/raw_formula_context_runtime_v1.py",
+    "formula_role_typo": "scripts/formula_role_typo_rescue_v1.py",
     "report": "reports/RAW_STROKE_FORMULA_CONTEXT_LOOP_20260819.md"
   },
   "limits": [
@@ -111,6 +136,8 @@
     "the relation merge thresholds were selected after inspecting the remaining grouping failure",
     "the cross merge thresholds were selected after inspecting writer_012 phone replay failures",
     "the formula placement rule was selected after inspecting the remaining public failure aiflow_0142",
+    "the formula-role typo and expanded straight-equality thresholds were selected after inspecting all current 159 formulas",
+    "CROHME is repeated noncommercial diagnostic evidence and not product validation",
     "single-glyph x/times remains unresolved because formula context is absent",
     "fresh commercial writer/formula-disjoint acceptance is required before product promotion"
   ]

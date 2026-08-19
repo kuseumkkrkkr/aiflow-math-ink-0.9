@@ -70,5 +70,25 @@
     "crohme_top20_sha256": "af83a2c3337a6984c7aa115ddc4c90b60886a306aecf37a2a6e52d3d42f61fa4",
     "runtime_cli_semantic_replay_equal": true
   },
+  "current_formula_role_extension": {
+    "generated_at": "2026-08-19T17:13:00Z",
+    "status": "development_only_posthoc_shadow",
+    "stage_order": [
+      "unmatched_fence_operand",
+      "operator_cross_slot",
+      "dual_straight_one_slot",
+      "formula_role_typo"
+    ],
+    "current_159_formula_exact_before": 138,
+    "current_159_formula_exact_after_placement": 146,
+    "current_159_formula_regressed": 0,
+    "crohme_984_formula_exact_before": 288,
+    "crohme_984_formula_exact_after": 295,
+    "crohme_formula_regressed": 0,
+    "crohme_glyph_regressed": 0,
+    "runtime_config_sha256": "3b292678468d8ee8622b6420612d20a0478d7419aefbb2d633d0ad7c8150659b",
+    "crohme_diagnostic_sha256": "c352f852cda4429a27c93e206e498f73e680c615303c3598c32b6c1704e1cc27",
+    "product_default_admitted": false
+  },
   "promotion_requirement": "untouched project-owned writer-disjoint and formula-disjoint commercial acceptance evidence"
 }

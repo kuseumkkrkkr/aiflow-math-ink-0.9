@@ -1,6 +1,6 @@
 {
   "schema": "aiflow-raw-candidate-context-fusion-evaluation/v1",
-  "generated_at": "2026-08-19T16:52:52.6940799Z",
+  "generated_at": "2026-08-19T17:13:00Z",
   "status": "development_only_posthoc_shadow",
   "protocol": {
     "dataset_formulas": 96,
@@ -16,8 +16,8 @@
     "hwr_checkpoint_sha256": "1fed74b4580d3acc9ff48544a7d715c52170037bcb0842921b1fe0339f0abd1d",
     "auxiliary_hwr_checkpoint_sha256": "04f8608aebcf6c02d45ad6f5735229b9eaa2c4b4e1be0db4793d02273ef2d00e",
     "context_checkpoint_sha256": "7e0ff1b04ba1071867bfa6811869f242907ebe017d0996597776c6050cc2fc94",
-    "formula_placement_config_sha256": "d3167d51003cfb1f77d9ec52d3883d1cff0a9a479cd29cdc6befccde82ea6882",
-    "straight_equality_config_sha256": "68f0d50eadbd9eb9bbe2230df61a42b5f6421567b8e70841d91bc6416cd9b088"
+    "formula_placement_config_sha256": "3b292678468d8ee8622b6420612d20a0478d7419aefbb2d633d0ad7c8150659b",
+    "straight_equality_config_sha256": "4711023cbb4679eb9864950ffa2b6d7fccb49dc0384a1b7cf74f00e2eb4b8ffa"
   },
   "posthoc_design_guard": {
     "grouping_exact": {"count": 48, "total": 49},
@@ -60,17 +60,20 @@
       "preserve_merged_x_after_auxiliary_fusion": true
     },
     "grouping_exact": {"count": 49, "total": 49},
-    "final_formula_exact": {"count": 43, "total": 49, "rate": 0.8775510204081632},
+    "final_formula_exact": {"count": 46, "total": 49, "rate": 0.9387755102040817},
     "changed_formulas": [],
     "auxiliary_semantic_lock_changes": 0,
     "regressed_formulas": []
   },
   "formula_placement_composition": {
     "product_fused_top20_formula_oracle": {"count": 48, "total": 49},
-    "formula_placement_formula_exact": {"count": 43, "total": 49, "rate": 0.8775510204081632},
-    "straight_equality_formula_exact": {"count": 43, "total": 49, "rate": 0.8775510204081632},
-    "formula_placement_changes": 0,
-    "straight_equality_changes": 0,
+    "formula_placement_formula_exact": {"count": 45, "total": 49, "rate": 0.9183673469387755},
+    "straight_equality_formula_exact": {"count": 46, "total": 49, "rate": 0.9387755102040817},
+    "formula_placement_changes": 2,
+    "formula_role_typo_changed_glyphs": 2,
+    "formula_role_typo_improved_formulas": ["aiflow_0004", "aiflow_0061"],
+    "straight_equality_changes": 1,
+    "straight_equality_improved_formulas": ["aiflow_0056"],
     "pipeline_input": "wide_numeric_syntax_output",
     "regressed_formulas": []
   },
@@ -82,18 +85,16 @@
     "dual_numeric_improved": ["aiflow_0049", "aiflow_0052", "aiflow_0078"],
     "dual_numeric_regressed": [],
     "wide_numeric_improved": ["aiflow_0010", "aiflow_0049", "aiflow_0052", "aiflow_0058", "aiflow_0078"],
-    "wide_numeric_regressed": []
+    "wide_numeric_regressed": [],
+    "formula_role_typo_improved": ["aiflow_0004", "aiflow_0061"],
+    "formula_role_typo_regressed": [],
+    "straight_equality_improved": ["aiflow_0056"],
+    "straight_equality_regressed": []
   },
   "remaining": {
     "grouping_failure": [],
-    "truth_outside_product_fused_top10_union": ["aiflow_0064"],
-    "unresolved_inside_product_fused_top10_union": [
-      "aiflow_0004",
-      "aiflow_0046",
-      "aiflow_0056",
-      "aiflow_0061",
-      "aiflow_0072"
-    ]
+    "truth_outside_product_fused_top20_union": ["aiflow_0064"],
+    "unresolved_inside_product_fused_top20_union": ["aiflow_0046", "aiflow_0072"]
   },
   "contracts": {
     "target_label_writer_or_target_count_input": false,
@@ -106,6 +107,9 @@
     "cross_merge_merged_hwr_and_context_token": "x",
     "cross_merge_auxiliary_semantic_lock_candidate_preserving": true,
     "formula_placement_candidate_contract": "product_fused_top20",
+    "formula_role_typo_geometry_and_role_gated": true,
+    "formula_role_typo_target_input_disabled": true,
+    "formula_role_typo_changed_glyphs": 2,
     "formula_placement_inserted_or_deleted_glyphs": 0,
     "straight_equality_maximum_changes_per_formula": 1,
     "restricted_context_original_top5_candidate_set_preserved": true,
@@ -125,9 +129,23 @@
     "arithmetic_evaluation": false,
     "product_default_enabled": false
   },
+  "crohme_repeated_noncommercial_diagnostic": {
+    "path": "crohme_formula_role_diagnostic.json",
+    "sha256": "c352f852cda4429a27c93e206e498f73e680c615303c3598c32b6c1704e1cc27",
+    "formulas": 984,
+    "baseline_formula_exact_count": 288,
+    "final_formula_exact_count": 295,
+    "formula_improved": 7,
+    "formula_regressed": 0,
+    "baseline_character_top1_count": 7516,
+    "final_character_top1_count": 7555,
+    "glyph_improved": 39,
+    "glyph_regressed": 0,
+    "product_validation": false
+  },
   "full_local_probe": {
-    "path": "artifacts/partition_context_ranker_20260820_r31_cross_placement_final/partition_context_ranker_summary.json",
-    "sha256": "9099780544efad03a226b7a3f68888e2876e4353e71404ab828b27864132bb51",
+    "path": "artifacts/partition_context_ranker_20260820_r33_role_typo_crohme_guarded/partition_context_ranker_summary.json",
+    "sha256": "58b64880775040bc1379ce853288fdebf490813f72c68bf30b1ad1d789a6d33b",
     "selected_artifact": false
   }
 }

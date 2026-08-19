@@ -1,2 +1,7 @@
 *.jsonl binary
 artifacts/raw_candidate_context_fusion_20260819_r1_shadow/*.json binary
+artifacts/formula_placement_rescue_20260819_r1_shadow/*.json text eol=lf
+artifacts/straight_equality_slot_rescue_20260819_r1_shadow/*.json text eol=lf
+scripts/formula_placement_rescue_v1.py text eol=lf
+scripts/formula_role_typo_rescue_v1.py text eol=lf
+scripts/straight_equality_slot_rescue_v1.py text eol=lf
