@@ -132,3 +132,7 @@ Top-20은 후보 회수 상한을 직접 수집 88/95에서 91/95로 넓혔지�
 ### 이중 직선 1 피연산자 복원
 
 정확히 `숫자-\div-모호문자-=-모호문자`인 5글자 식에서 두 모호문자가 모두 단일 직선 stroke이고 각 후보의 최상위 숫자가 충분한 차이로 `1`일 때만 두 위치를 함께 복원한다. 누적 직접 수집은 문자 362/387(93.54%), 식 완전일치 81/95(85.26%)이며 이번 단계의 회귀는 0건이다. CROHME 반복 진단에서는 변경이 없었다. 독립 상업 검증 전까지 `shadow_runtime_only`이며 상세 근거는 [reports/DUAL_STRAIGHT_ONE_SLOT_RESCUE_LOOP_20260819.md](reports/DUAL_STRAIGHT_ONE_SLOT_RESCUE_LOOP_20260819.md)에 기록했다.
+
+### 통합 공식 배치 복원 레이어
+
+세 배치 가드를 `짝 없는 괄호 → 십자 연산자 → 이중 직선 1` 순서의 단일 shadow 런타임으로 합쳤다. 기존 Top-10 구문 기준에서 직접 수집은 3식 개선·0식 회귀, CROHME는 전 단계 변경 0건이며 CLI 재생 결과도 동일하다. 남은 14식 중 10식은 의미 동형 구분용 새 소유 문맥 데이터가, 4식은 HWR 후보 recall 개선이 필요하다. 통합 계약과 승격 경계는 [reports/FORMULA_PLACEMENT_RESCUE_INTEGRATION_20260819.md](reports/FORMULA_PLACEMENT_RESCUE_INTEGRATION_20260819.md)에 기록했다.
