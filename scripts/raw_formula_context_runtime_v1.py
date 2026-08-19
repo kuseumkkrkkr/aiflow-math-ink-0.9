@@ -57,6 +57,9 @@ from evaluate_partition_context_ranker_v1 import (
     _validate_repeat_merge_configuration,
 )
 from finalize_formula_context_v1 import DEFAULT_CONTEXT, OwnedFormulaContextFinalizer
+from formula_acceptance_guard_v1 import (
+    apply_formula_acceptance_guard, load_configuration as load_acceptance_configuration,
+)
 from singleton_shape_rescue_v1 import (
     SCHEMA as SINGLETON_SCHEMA, apply_singleton_shape_rescue,
     validate_configuration as validate_singleton_configuration,
@@ -1083,6 +1086,7 @@ def main() -> int:
     parser.add_argument("--latin-auxiliary-checkpoint", type=Path)
     parser.add_argument("--pairwise-shape-expert", type=Path)
     parser.add_argument("--pairwise-shape-config", type=Path)
+    parser.add_argument("--formula-acceptance-config", type=Path)
     parser.add_argument("--input", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
@@ -1129,6 +1133,13 @@ def main() -> int:
             "posthoc_test_tuning": True,
         },
     }
+    if args.formula_acceptance_config is not None:
+        acceptance_configuration, acceptance_configuration_sha256 = (
+            load_acceptance_configuration(args.formula_acceptance_config)
+        )
+        output = apply_formula_acceptance_guard(
+            output, acceptance_configuration, acceptance_configuration_sha256,
+        )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
         json.dumps(output, ensure_ascii=False, indent=2) + "\n",

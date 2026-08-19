@@ -9,6 +9,7 @@ pre-merge baseline only for formulas whose selected partition changed.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -17,6 +18,9 @@ from pathlib import Path
 
 from audit_replay_protocol_v1 import CROHME_ALIASES, DEFAULT_CROHME, _crohme_sample
 from evaluate_48hz_prefix_v1 import _sha256
+from formula_acceptance_guard_v1 import (
+    AUTO_ACCEPTED, assess_formula, load_configuration,
+)
 from raw_formula_context_runtime_v1 import RawFormulaContextRuntimeV1
 from replay_evaluate_hwr_v1 import load_crohme
 
@@ -57,6 +61,7 @@ def main() -> int:
     parser.add_argument("--latin-auxiliary-checkpoint", type=Path, required=True)
     parser.add_argument("--pairwise-shape-expert", type=Path)
     parser.add_argument("--pairwise-shape-config", type=Path)
+    parser.add_argument("--formula-acceptance-config", type=Path)
     parser.add_argument("--crohme", type=Path, default=DEFAULT_CROHME)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
@@ -67,6 +72,12 @@ def main() -> int:
         parser.error("output must be a new file on D:")
     if not crohme.is_dir():
         parser.error("CROHME root is missing")
+    acceptance_configuration = None
+    acceptance_configuration_sha256 = None
+    if args.formula_acceptance_config is not None:
+        acceptance_configuration, acceptance_configuration_sha256 = load_configuration(
+            args.formula_acceptance_config,
+        )
     runtime = RawFormulaContextRuntimeV1.from_artifacts(
         args.partition_ranker, args.hwr_checkpoint, args.context_checkpoint,
         device=args.device,
@@ -262,6 +273,46 @@ def main() -> int:
                     "pairwise_shape_rescue"
                 ],
             })
+    acceptance_report = {"enabled": False}
+    if acceptance_configuration is not None:
+        decisions = {
+            formula_id: assess_formula(candidate_results[formula_id], acceptance_configuration)
+            for formula_id, _sample, _truth_tokens in eligible
+        }
+        accepted_ids = [
+            formula_id for formula_id, decision in decisions.items()
+            if decision["decision_status"] == AUTO_ACCEPTED
+        ]
+        truth_by_id = {
+            formula_id: truth_tokens for formula_id, _sample, truth_tokens in eligible
+        }
+        accepted_exact = sum(
+            candidate_results[formula_id]["finalized_tokens"] == truth_by_id[formula_id]
+            for formula_id in accepted_ids
+        )
+        reason_counts = Counter(
+            reason for decision in decisions.values()
+            for reason in decision["review_reasons"]
+        )
+        acceptance_report = {
+            "schema": "aiflow-formula-acceptance-crohme-diagnostic/v1",
+            "enabled": True,
+            "configuration_sha256": acceptance_configuration_sha256,
+            "formulas": len(decisions),
+            "auto_accepted": len(accepted_ids),
+            "auto_accept_coverage": len(accepted_ids) / max(len(decisions), 1),
+            "auto_accepted_exact": accepted_exact,
+            "auto_accepted_errors": len(accepted_ids) - accepted_exact,
+            "auto_accepted_precision": accepted_exact / max(len(accepted_ids), 1),
+            "review_required": len(decisions) - len(accepted_ids),
+            "review_reasons": dict(sorted(reason_counts.items())),
+            "candidate_preserving": True,
+            "token_mutations": 0,
+            "grouping_mutations": 0,
+            "arithmetic_evaluation": False,
+            "product_validation": False,
+            "product_default_enabled": False,
+        }
     report = {
         "schema": SCHEMA,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -315,6 +366,7 @@ def main() -> int:
             "changed_formulas": len(pairwise_shape_changed_ids),
             "changed_formula_ids": sorted(pairwise_shape_changed_ids),
         },
+        "formula_acceptance_guard": acceptance_report,
         "current_loop": {
             "changed_formulas": len(changed_ids),
             "changed_formula_ids": sorted(changed_ids),
@@ -345,6 +397,7 @@ def main() -> int:
                 _sha256(args.pairwise_shape_config.resolve())
                 if args.pairwise_shape_config is not None else None
             ),
+            "formula_acceptance_config_sha256": acceptance_configuration_sha256,
         },
         "limits": [
             "CROHME is noncommercial repeated diagnostic evidence, not product validation",
@@ -367,6 +420,7 @@ def main() -> int:
         "open_fence_plus_rescue_changed": len(open_fence_plus_changed_ids),
         "ranked_singleton_rescue_changed": len(ranked_singleton_changed_ids),
         "pairwise_shape_rescue_changed": len(pairwise_shape_changed_ids),
+        "formula_acceptance_guard": acceptance_report,
     }, ensure_ascii=False))
     return 0
 
