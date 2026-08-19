@@ -708,9 +708,18 @@ def _valid_runtime_configuration(configuration: object) -> bool:
 
 def load_owned_formula_context(
     checkpoint_path: Path, hwr_checkpoint: Path, device: torch.device,
+    *, require_d_drive: bool = True,
 ) -> tuple[OwnedFormulaContext, dict, dict]:
-    checkpoint_path = masked._d_path(checkpoint_path, "owned context checkpoint")
-    hwr_checkpoint = masked._d_path(hwr_checkpoint, "HWR checkpoint")
+    if require_d_drive:
+        checkpoint_path = masked._d_path(checkpoint_path, "owned context checkpoint")
+        hwr_checkpoint = masked._d_path(hwr_checkpoint, "HWR checkpoint")
+    else:
+        checkpoint_path = Path(checkpoint_path).expanduser().resolve()
+        hwr_checkpoint = Path(hwr_checkpoint).expanduser().resolve()
+    if not checkpoint_path.is_file():
+        raise FileNotFoundError(f"missing owned context checkpoint: {checkpoint_path}")
+    if not hwr_checkpoint.is_file():
+        raise FileNotFoundError(f"missing HWR checkpoint: {hwr_checkpoint}")
     payload = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
     labels = masked._labels(hwr_checkpoint)
     if (

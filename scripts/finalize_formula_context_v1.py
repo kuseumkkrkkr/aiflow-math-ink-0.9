@@ -8,6 +8,10 @@ context model is followed by a support-aware exact-context gate, then locked-
 fence and horizontal-infix guards. Arithmetic equation correction is research-
 only and must be enabled explicitly because HWR must preserve a user's wrong
 answer rather than silently solve it.
+
+Research training keeps its D-drive storage boundary. This inference entrypoint
+accepts ordinary resolved paths so the same frozen checkpoints can run in a
+Linux container or behind a Windows UNC path.
 """
 
 from __future__ import annotations
@@ -146,6 +150,8 @@ class OwnedFormulaContextFinalizer:
             raise ValueError(f"unsupported device: {resolved_device}")
         if resolved_device == "cuda" and not torch.cuda.is_available():
             raise ValueError("CUDA requested but unavailable")
+        checkpoint = Path(checkpoint).expanduser().resolve()
+        hwr_checkpoint = Path(hwr_checkpoint).expanduser().resolve()
         self.device = torch.device(resolved_device)
         self.batch_size = batch_size
         self.semantic_guards = semantic_guards
@@ -153,7 +159,7 @@ class OwnedFormulaContextFinalizer:
         self.checkpoint_sha256 = _sha256(checkpoint)
         self.hwr_checkpoint_sha256 = _sha256(hwr_checkpoint)
         self.model, self.contract, self.payload = load_owned_formula_context(
-            checkpoint, hwr_checkpoint, self.device
+            checkpoint, hwr_checkpoint, self.device, require_d_drive=False
         )
         self.labels = set(self.contract["label_to_index"])
 
@@ -375,8 +381,10 @@ def main() -> int:
         return 0
     if args.input is None or args.output is None:
         parser.error("--input and --output are required unless --self-test is used")
-    input_path = masked._d_path(args.input, "candidate input")
-    output_path = masked._d_path(args.output, "finalized output")
+    input_path = Path(args.input).expanduser().resolve()
+    output_path = Path(args.output).expanduser().resolve()
+    if not input_path.is_file():
+        parser.error(f"candidate input is missing: {input_path}")
     if output_path.exists():
         parser.error(f"refusing to overwrite finalized output: {output_path}")
     finalizer = OwnedFormulaContextFinalizer(
