@@ -412,10 +412,15 @@ def _pack_runtime(
                     f"formula context token outside HWR candidates: {record_id}"
                 )
     for formula_id, sequence in masked._formulae(rows).items():
-        relations = [
-            masked._spatial_relation(sequence[index - 1], sequence[index])
-            for index in range(1, len(sequence))
-        ]
+        relations = []
+        for index in range(1, len(sequence)):
+            explicit = sequence[index].get("context", {}).get("relation_from_previous")
+            relation = str(explicit) if explicit is not None else masked._spatial_relation(
+                sequence[index - 1], sequence[index]
+            )
+            if relation not in masked.RELATIONS:
+                raise ValueError(f"unsupported formula layout relation: {relation}")
+            relations.append(relation)
         for target_index, target in enumerate(sequence):
             ids = [contract["cls_id"]]
             mask_position = -1

@@ -4,10 +4,10 @@
 The runtime never receives truth labels and never creates a token, deletes a
 glyph, or changes stroke ownership. Load ``OwnedFormulaContextFinalizer`` once
 per process, then call ``finalize`` for each candidate batch. The selected r6
-context model is followed by a support-aware exact-context gate, then locked-
-fence and horizontal-infix guards. Arithmetic equation correction is research-
-only and must be enabled explicitly because HWR must preserve a user's wrong
-answer rather than silently solve it.
+context model is followed by conservative semantic guards. An optional formula
+sequence layer repairs only invalid simple numeric syntax inside Top-5; it does
+not evaluate arithmetic. Arithmetic equation correction is research-only and
+must be enabled explicitly because HWR must preserve a user's wrong answer.
 
 Research training keeps its D-drive storage boundary. This inference entrypoint
 accepts ordinary resolved paths so the same frozen checkpoints can run in a
@@ -28,11 +28,17 @@ import torch
 from character_tensor_v1 import _json_lines
 from evaluate_48hz_prefix_v1 import DEFAULT_PRODUCT, _sha256
 from context_recheck_guard_v1 import apply_context_recheck_guard
+from formula_layout_v1 import recontextualize_formula_rows
+from formula_script_network_v1 import NeuralScriptPredictor
+from formula_sequence_guard_v1 import (
+    apply_formula_sequence_guard, validate_configuration,
+)
 from semantic_equation_guard_v2 import apply_semantic_equation_guard_v2
 from semantic_fence_guard_v1 import apply_semantic_fence_guard
 from semantic_infix_guard_v1 import apply_semantic_infix_guard
 import train_masked_context_reranker_v1 as masked
 from train_owned_formula_context_v1 import (
+    _components,
     decide_owned_formula_rows_supported_exact,
     load_owned_formula_context,
 )
@@ -45,17 +51,20 @@ DEFAULT_CONTEXT = (
 )
 REQUIRED = {
     "record_id", "formula_id", "final_topk", "final_topk_probabilities",
-    "context", "geometry",
+    "geometry",
 }
+SEQUENCE_CONFIG_SCHEMA = "aiflow-formula-sequence-guard-runtime-config/v1"
 
 
-def _runtime_rows(rows: list[dict], labels: set[str]) -> list[dict]:
+def _runtime_rows(
+    rows: list[dict], labels: set[str], *, require_context: bool = True,
+) -> list[dict]:
     if not rows:
         raise ValueError("context finalizer requires at least one candidate row")
     clean = []
     record_ids = set()
     for source in rows:
-        missing = REQUIRED - set(source)
+        missing = (REQUIRED | ({"context"} if require_context else set())) - set(source)
         if missing:
             raise ValueError(f"candidate row missing fields: {sorted(missing)}")
         row = {key: value for key, value in source.items() if key != "label"}
@@ -83,19 +92,23 @@ def _runtime_rows(rows: list[dict], labels: set[str]) -> list[dict]:
         row["final_topk"] = candidates
         row["final_topk_probabilities"] = probabilities
         clean.append(row)
-    masked._formulae(clean)
+    if require_context:
+        masked._formulae(clean)
     return clean
 
 
 def _decision_metadata(
     row: dict, hwr: str, context_token: str, equation_token: str,
-    fence_token: str, first_final_token: str, final_token: str,
+    fence_token: str, first_final_token: str, pre_sequence_token: str,
+    final_token: str,
     supported_exact: bool = False,
 ) -> tuple[bool, str, str]:
     context_available = int(row["context"]["length"]) > 1
-    if not context_available:
+    if final_token != pre_sequence_token:
+        source = "formula_sequence_guard_v1"
+    elif not context_available:
         source = "context_prior_only" if final_token != hwr else "hwr_top1_no_context"
-    elif final_token != first_final_token:
+    elif pre_sequence_token != first_final_token:
         source = "context_recheck_guard_v1"
     elif first_final_token != fence_token:
         source = "semantic_infix_guard"
@@ -137,11 +150,18 @@ class OwnedFormulaContextFinalizer:
         self, checkpoint: Path, hwr_checkpoint: Path = DEFAULT_PRODUCT,
         *, device: str = "auto", batch_size: int = 128,
         semantic_guards: bool = True, equation_correction: bool = False,
+        formula_layout: bool = False,
+        script_layout_checkpoint: Path | None = None,
+        formula_sequence_config: Path | None = None,
     ) -> None:
         if batch_size < 1:
             raise ValueError("batch size must be positive")
         if equation_correction and not semantic_guards:
             raise ValueError("equation correction requires semantic guards")
+        if script_layout_checkpoint is not None and not formula_layout:
+            raise ValueError("script layout checkpoint requires formula layout")
+        if formula_sequence_config is not None and not formula_layout:
+            raise ValueError("formula sequence guard requires formula layout")
         resolved_device = (
             "cuda" if device == "auto" and torch.cuda.is_available()
             else ("cpu" if device == "auto" else device)
@@ -156,15 +176,51 @@ class OwnedFormulaContextFinalizer:
         self.batch_size = batch_size
         self.semantic_guards = semantic_guards
         self.equation_correction = equation_correction
+        self.formula_layout = formula_layout
+        self.script_layout_predictor = (
+            NeuralScriptPredictor(script_layout_checkpoint)
+            if script_layout_checkpoint is not None else None
+        )
         self.checkpoint_sha256 = _sha256(checkpoint)
         self.hwr_checkpoint_sha256 = _sha256(hwr_checkpoint)
         self.model, self.contract, self.payload = load_owned_formula_context(
             checkpoint, hwr_checkpoint, self.device, require_d_drive=False
         )
         self.labels = set(self.contract["label_to_index"])
+        self.sequence_guard_configuration = None
+        self.sequence_guard_config_sha256 = None
+        if formula_sequence_config is not None:
+            sequence_path = Path(formula_sequence_config).expanduser().resolve()
+            if not sequence_path.is_file():
+                raise FileNotFoundError(f"formula sequence config is missing: {sequence_path}")
+            sequence_payload = json.loads(sequence_path.read_text(encoding="utf-8"))
+            if (
+                sequence_payload.get("schema") != SEQUENCE_CONFIG_SCHEMA
+                or sequence_payload.get("checkpoint_sha256") != self.checkpoint_sha256
+                or sequence_payload.get("hwr_checkpoint_sha256") != self.hwr_checkpoint_sha256
+                or sequence_payload.get("gate", {}).get("runtime_admitted") is not True
+            ):
+                raise ValueError("formula sequence config contract mismatch")
+            self.sequence_guard_configuration = validate_configuration(
+                sequence_payload["configuration"]
+            )
+            self.sequence_guard_config_sha256 = _sha256(sequence_path)
 
     def finalize(self, rows: list[dict]) -> tuple[list[dict], dict]:
-        runtime_rows = _runtime_rows(rows, self.labels)
+        runtime_rows = _runtime_rows(
+            rows, self.labels, require_context=not self.formula_layout,
+        )
+        if self.formula_layout:
+            runtime_rows, layout_audit = recontextualize_formula_rows(
+                runtime_rows, script_predictor=self.script_layout_predictor,
+            )
+            if self.script_layout_predictor is not None:
+                layout_audit["script_checkpoint_sha256"] = _sha256(
+                    self.script_layout_predictor.checkpoint
+                )
+            masked._formulae(runtime_rows)
+        else:
+            layout_audit = {"enabled": False, "policy": "use caller-supplied context order"}
         context_predictions, model_audit = decide_owned_formula_rows_supported_exact(
             self.model, self.contract, self.payload, runtime_rows,
             self.device, self.batch_size,
@@ -229,6 +285,23 @@ class OwnedFormulaContextFinalizer:
             predictions = context_predictions
             first_predictions = predictions
             semantic_audit = {"enabled": False}
+        pre_sequence_predictions = predictions
+        if self.sequence_guard_configuration is not None:
+            sequence_components = _components(
+                self.model, self.contract, runtime_rows,
+                self.payload["role_grammar"], self.device, self.batch_size,
+                pre_sequence_predictions,
+            )
+            predictions, sequence_audit = apply_formula_sequence_guard(
+                runtime_rows, pre_sequence_predictions, sequence_components,
+                self.payload["role_grammar"], self.sequence_guard_configuration,
+            )
+            sequence_audit["config_sha256"] = self.sequence_guard_config_sha256
+        else:
+            sequence_audit = {
+                "enabled": False,
+                "policy": "formula sequence correction requires an admitted config",
+            }
         output = []
         for row in runtime_rows:
             record_id = str(row["record_id"])
@@ -242,14 +315,25 @@ class OwnedFormulaContextFinalizer:
                 str(equation_predictions[record_id]),
                 str(fence_predictions[record_id]),
                 str(first_predictions[record_id]),
+                str(pre_sequence_predictions[record_id]),
                 prediction,
                 record_id in supported_exact_records,
             )
             output.append({
-                "schema": "aiflow-formula-context-finalized/v4",
+                "schema": (
+                    "aiflow-formula-context-finalized/v6"
+                    if self.sequence_guard_configuration is not None
+                    else (
+                        "aiflow-formula-context-finalized/v5"
+                        if self.formula_layout else "aiflow-formula-context-finalized/v4"
+                    )
+                ),
                 "record_id": record_id,
                 "formula_id": str(row["formula_id"]),
                 "context_index": int(row["context"]["index"]),
+                "layout_relation_from_previous": row["context"].get(
+                    "relation_from_previous"
+                ),
                 "context_available": context_available,
                 "decision_status": decision_status,
                 "decision_source": decision_source,
@@ -263,6 +347,7 @@ class OwnedFormulaContextFinalizer:
             "context_checkpoint_sha256": self.checkpoint_sha256,
             "hwr_checkpoint_sha256": self.hwr_checkpoint_sha256,
             "pipeline": [
+                *(["formula_layout_v1"] if self.formula_layout else []),
                 "owned_formula_context_r6",
                 "owned_supported_exact_context_guard_v1",
             ] + (
@@ -275,6 +360,9 @@ class OwnedFormulaContextFinalizer:
                     "context_recheck_guard_v1",
                 ]
                 if self.semantic_guards else []
+            ) + (
+                ["formula_sequence_guard_v1"]
+                if self.sequence_guard_configuration is not None else []
             ),
             "records": len(output),
             "formulas": len({row["formula_id"] for row in output}),
@@ -286,8 +374,10 @@ class OwnedFormulaContextFinalizer:
             "deleted_glyphs": 0,
             "grouping_mutations": 0,
             "equation_correction_enabled": self.equation_correction,
+            "formula_layout": layout_audit,
             "model": model_audit,
             "semantic_guards": semantic_audit,
+            "formula_sequence_guard": sequence_audit,
         }
 
 
@@ -311,19 +401,22 @@ def _self_test() -> None:
     clean = _runtime_rows(rows, labels)
     assert "label" not in clean[0]
     assert clean[0]["final_topk"] == ["1", "+"]
-    assert _decision_metadata(clean[0], "1", "+", "+", "+", "+", "+") == (
+    assert _decision_metadata(clean[0], "1", "+", "+", "+", "+", "+", "+") == (
         False, "ambiguous_no_formula_context", "context_prior_only",
     )
     contextual = {**clean[0], "context": {"index": 1, "length": 3}}
-    assert _decision_metadata(contextual, "1", "1", "1", "1", "+", "+") == (
+    assert _decision_metadata(contextual, "1", "1", "1", "1", "+", "+", "+") == (
         True, "finalized", "semantic_infix_guard",
     )
     assert _decision_metadata(
-        contextual, "h", "b", "b", "b", "b", "b", True
+        contextual, "h", "b", "b", "b", "b", "b", "b", True
     ) == (True, "finalized", "owned_supported_exact_context_guard")
     assert _decision_metadata(
-        contextual, "x", r"\times", r"\times", r"\times", r"\times", "x"
+        contextual, "x", r"\times", r"\times", r"\times", r"\times", "x", "x"
     ) == (True, "finalized", "context_recheck_guard_v1")
+    assert _decision_metadata(
+        contextual, "b", "b", "b", "b", "b", "b", "6"
+    ) == (True, "finalized", "formula_sequence_guard_v1")
     equation_rows = [
         {
             "record_id": f"e{index}", "formula_id": "wrong-answer",
@@ -368,6 +461,18 @@ def main() -> int:
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--disable-semantic-guards", action="store_true")
     parser.add_argument(
+        "--enable-formula-layout", action="store_true",
+        help="shadow: derive order and spatial relations from immutable boxes",
+    )
+    parser.add_argument(
+        "--script-layout-checkpoint", type=Path,
+        help="optional commercial-safe neural script-relation challenger",
+    )
+    parser.add_argument(
+        "--formula-sequence-config", type=Path,
+        help="shadow: admitted candidate-preserving numeric syntax correction",
+    )
+    parser.add_argument(
         "--enable-equation-correction", action="store_true",
         help="research-only: allow exact arithmetic to override HWR candidates",
     )
@@ -375,6 +480,10 @@ def main() -> int:
     args = parser.parse_args()
     if args.enable_equation_correction and args.disable_semantic_guards:
         parser.error("--enable-equation-correction conflicts with --disable-semantic-guards")
+    if args.script_layout_checkpoint and not args.enable_formula_layout:
+        parser.error("--script-layout-checkpoint requires --enable-formula-layout")
+    if args.formula_sequence_config and not args.enable_formula_layout:
+        parser.error("--formula-sequence-config requires --enable-formula-layout")
     if args.self_test:
         _self_test()
         print(json.dumps({"self_test": "pass"}))
@@ -392,6 +501,9 @@ def main() -> int:
         device=args.device, batch_size=args.batch_size,
         semantic_guards=not args.disable_semantic_guards,
         equation_correction=args.enable_equation_correction,
+        formula_layout=args.enable_formula_layout,
+        script_layout_checkpoint=args.script_layout_checkpoint,
+        formula_sequence_config=args.formula_sequence_config,
     )
     finalized, audit = finalizer.finalize(list(_json_lines(input_path)))
     output_path.parent.mkdir(parents=True, exist_ok=True)
