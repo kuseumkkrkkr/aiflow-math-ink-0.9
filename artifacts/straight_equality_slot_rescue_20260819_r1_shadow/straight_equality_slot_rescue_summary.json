@@ -2,6 +2,7 @@
   "schema": "aiflow-straight-equality-slot-rescue-summary/v1",
   "status": "shadow_runtime_only",
   "product_default_admitted": false,
+  "evaluation_contract": "verified box-local ownership; not raw-stroke end-to-end grouping",
   "direct_project_owned_development": {
     "before_character_top1_count": 369,
     "after_character_top1_count": 371,

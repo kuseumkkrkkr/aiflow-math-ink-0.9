@@ -31,6 +31,12 @@
     "glyphs": 0,
     "formulas": 0
   },
+  "evaluation_contract": {
+    "verified_ownership_groups_supplied": true,
+    "geometry_order_exact_formulas": 95,
+    "raw_stroke_grouping_decoder_evaluated": false,
+    "canonical_10_end_to_end_scorable": false
+  },
   "invariants": {
     "labels_changed": 0,
     "strokes_changed": 0,
