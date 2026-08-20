@@ -250,11 +250,15 @@ def _examples(rows: list[dict], contract: dict, context_tokens: dict[str, str] |
             ids.append(contract["sep_id"])
             if mask_position < 0 or len(ids) > 512:
                 raise ValueError(f"masked sequence exceeds BERT contract: {formula_id}")
+            target_label = str(target.get("label", target["final_topk"][0]))
+            if target_label not in label_to_index:
+                raise ValueError(f"masked target outside 372 classes: {target_label}")
             output.append({
                 "row": target,
                 "input_ids": ids,
                 "mask_position": mask_position,
-                "target": label_to_index[target["label"]],
+                # Inference rows do not carry truth; this value is unused there.
+                "target": label_to_index[target_label],
             })
     if {example["row"]["record_id"] for example in output} != {row["record_id"] for row in rows}:
         raise AssertionError("masked-context example coverage mismatch")
@@ -609,6 +613,11 @@ def _self_test(pretrained: Path, labels: list[str], device: torch.device) -> Non
     context = _context_log_probabilities(model, contract, rows, device, 3)
     predictions = _fused_predictions(rows, context, labels, 0.0)
     assert predictions == {"r0": "|", "r1": "+", "r2": "2"}
+    runtime_rows = [{key: value for key, value in row.items() if key != "label"} for row in rows]
+    runtime_predictions = rerank_formula_rows(
+        model, contract, {"math_labels": labels, "lambda": 0.0}, runtime_rows, device,
+    )
+    assert runtime_predictions == predictions
     assert _candidate_audit(rows, predictions)["candidate_preservation_rate"] == 1.0
     assert len(tokenizer) == 30522 + 372 + len(RELATIONS)
     assert sum(parameter.numel() for parameter in model.parameters()) < 5_000_000

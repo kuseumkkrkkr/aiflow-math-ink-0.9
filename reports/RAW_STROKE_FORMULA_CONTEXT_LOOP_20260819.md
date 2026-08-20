@@ -436,3 +436,25 @@ direct 읽기 순서는 94/95로 같았고, 관계식 1건을 제외한 94개 �
 
 - wrapper 직접 레이아웃 평가: `0da5ac483f804e9e7a4ca792a338843d3858bd59a9528f3b281b91ef59634f95`
 - 현재 159식 + CROHME 비회귀 선택 게이트: `56a2f4c02dd05a00e4a0063e539d7c15dca0a54bb46921e09eadd8568398c3a7`
+
+## 2026-08-20 BERT-Tiny abstention gate와 상위 runtime 연결 기각
+
+초기 BERT-Tiny masked-context 모델의 CROHME strict macro 하락은 HWR가 이미 선택한 희소 동형문자까지 문맥 모델이 덮어쓴 데서 발생했다. 따라서 HWR Top-1이 strict family(`1·|·/`, `0·O·o`, `x·\times`)에 속하면 그대로 잠그고, 나머지 변경만 프로젝트 소유 OOF 예측에서 writer-LOO로 선택하는 abstention gate를 평가했다. CROHME는 gate 선택에 사용하지 않았다.
+
+| 평가 | HWR 기준 | abstention 적용 |
+|---|---:|---:|
+| 직접수집 47식, 문자 Top-1 | 155/211 (73.46%) | **163/211 (77.25%)** |
+| 직접수집 47식, 식 exact | 16/47 (34.04%) | **17/47 (36.17%)** |
+| 직접수집 strict macro | 57.94% | **59.99%** |
+| CROHME 문자 Top-1 | 6627/9535 (69.50%) | **7143/9535 (74.91%)** |
+| CROHME 식 exact | 156/984 (15.85%) | **219/984 (22.26%)** |
+| CROHME strict macro | 42.64% | **50.42%** |
+
+직접수집 nested writer-LOO는 9문자 개선·1문자 퇴행, CROHME 반복 진단은 615문자 개선·99문자 퇴행이었다. 모든 출력은 기존 HWR Top-5 안에 있고 문자 생성·삭제·그룹 변경은 0이다. 이 결과만 보면 초기 문맥 모델의 독립 shadow 신호는 회귀가 줄었다.
+
+그러나 이를 현재 선택된 공식 배치 runtime 159식에 직접 연결하면 결과가 반대였다. 초기 BERT 출력을 전부 쓰면 `153/159 → 84/159`, 현재 finalizer가 HWR Top-1에 머문 위치만 보정해도 `153/159 → 145/159`였다. 개선은 0식, 기존 정답 퇴행은 8식이었다. 따라서 초기 BERT는 현재 상위 finalizer의 확정권을 가져갈 수 없으며, 연결 가설은 `reject_runtime_integration_keep_diagnostic_shadow`로 기각했다.
+
+상용 정확도를 더 올릴 다음 입력은 표적 collector에서 들어오는 새 writer/formula-disjoint 데이터다. 그 데이터로 현재 소유식 문맥 모델을 다시 학습한 뒤 동일 gate를 untouched acceptance에서 선택해야 한다. 현재 collector 재폴링 결과는 계속 `Listed=164, Downloaded=0, Total=164`이다.
+
+- abstention 평가 SHA-256: `48282e167f8d3db2e667182c06e6aac9ab72267f0924617e177a4306f71a0e3b`
+- 현재 159식 runtime 연결 probe SHA-256: `1a041a84bbe0417308919d3f62d99e495c7d0cd0a52449186b7d181f14148252`
