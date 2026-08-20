@@ -189,14 +189,17 @@ def _write_rows(path: Path, rows: list[dict]) -> None:
             stream.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
 
 
-def _decorate(saved_rows: list[dict], items: list[dict], scores: dict[str, dict], geometry: dict[str, dict[str, float]]) -> list[dict]:
+def _decorate(
+    saved_rows: list[dict], items: list[dict], scores: dict[str, dict],
+    geometry: dict[str, dict[str, float]], *, verify_saved_top5: bool = True,
+) -> list[dict]:
     item_ids = {item["record_id"] for item in items}
     if item_ids != {row["record_id"] for row in saved_rows}:
         raise ValueError("raw item and saved prediction IDs differ")
     rows = []
     for saved in saved_rows:
         score = scores[saved["record_id"]]
-        if score["final_topk"] != saved["final_topk"]:
+        if verify_saved_top5 and score["final_topk"] != saved["final_topk"]:
             raise ValueError(f"checkpoint replay changed saved Top-5: {saved['record_id']}")
         rows.append({
             key: saved[key] for key in ("record_id", "label", "source", "formula_id", "writer_group") if key in saved
@@ -447,7 +450,10 @@ def _load_or_build(scope: str, cache_path: Path, saved_path: Path, args, device:
         scores = _score_items(items, model, labels, device)
         geometry = _geometry(items)
         source = {"cache_reused": False, "checkpoint_sha256": _sha256(product_path), "coverage": coverage}
-    rows = _decorate(saved, items, scores, geometry)
+    rows = _decorate(
+        saved, items, scores, geometry,
+        verify_saved_top5=not args.allow_challenger_top5,
+    )
     _write_rows(cache_path, rows)
     return rows, source
 
@@ -464,6 +470,25 @@ def _self_test() -> None:
     assert [token for token, _, _ in _options(row)] == ["|", "1", "I", "/"]
     fixed = _apply(None, [row], "context")
     assert fixed == {"r": "|"}
+    saved = [{
+        "record_id": "r", "label": "1", "formula_id": "f",
+        "final_topk": ["1", "|"],
+    }]
+    scores = {
+        "r": {"final_topk": ["|", "1"], "final_topk_probabilities": [0.6, 0.4]}
+    }
+    geometry = {"r": {"center_x": 0.5, "center_y": 0.5}}
+    try:
+        _decorate(saved, [{"record_id": "r"}], scores, geometry)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("changed challenger Top-5 bypassed the default replay check")
+    challenger = _decorate(
+        saved, [{"record_id": "r"}], scores, geometry,
+        verify_saved_top5=False,
+    )
+    assert challenger[0]["final_topk"] == ["|", "1"]
 
 
 def main() -> int:
@@ -476,6 +501,13 @@ def main() -> int:
     parser.add_argument("--crohme", type=Path, default=DEFAULT_CROHME)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
+    parser.add_argument(
+        "--allow-challenger-top5", action="store_true",
+        help=(
+            "build a new candidate cache from the supplied HWR checkpoint while "
+            "using saved rows only for IDs, labels, grouping, and raw geometry"
+        ),
+    )
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
     if args.self_test:
