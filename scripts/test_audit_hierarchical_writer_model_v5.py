@@ -13,8 +13,10 @@ import numpy as np
 
 from audit_hierarchical_writer_model_v5 import (
     _assignment_audit,
+    _baseline_collisions,
     _evaluation_boundary,
     _formula_audit,
+    _input_path_and_hash,
     _source_audit,
 )
 
@@ -101,6 +103,35 @@ class WriterModelAuditTest(unittest.TestCase):
             }}, project_bank_used=False)
             self.assertTrue(isolated["evaluation_only_parent_lineage"])
             self.assertFalse(isolated["evaluation_only_parent_lineage_used"])
+
+    def test_baseline_collision_is_reported_without_structural_rejection(self) -> None:
+        """겹친 인접 glyph를 시각 진단 후보로 보고한다."""
+
+        row = {
+            "glyphs": [
+                {"glyph_id": "a", "token": "x", "relation": "baseline", "x": 0.0},
+                {"glyph_id": "b", "token": "+", "relation": "baseline", "x": 1.0},
+            ],
+            "events": [
+                {"glyph_id": "a", "points": [{"x": 0.0, "y": 0.0}, {"x": 1.0, "y": 1.0}]},
+                {"glyph_id": "b", "points": [{"x": 0.5, "y": 0.0}, {"x": 1.5, "y": 1.0}]},
+            ],
+        }
+        collisions = _baseline_collisions(row)
+        self.assertEqual(len(collisions), 1)
+        self.assertEqual(collisions[0]["right_token"], "+")
+
+    def test_v6_nested_input_respects_loaded_boundary(self) -> None:
+        """v6 입력 객체에서 loaded=false인 평가은행을 열지 않는다."""
+
+        inputs = {
+            "external": {"path": "D:/external.npz", "sha256": "abc"},
+            "project_evaluation": {"path": "D:/evaluation.npz", "loaded": False},
+        }
+        external = _input_path_and_hash(inputs, "external")
+        self.assertIsNotNone(external)
+        self.assertEqual(external[1], "abc")
+        self.assertIsNone(_input_path_and_hash(inputs, "project_evaluation"))
 
 
 if __name__ == "__main__":
