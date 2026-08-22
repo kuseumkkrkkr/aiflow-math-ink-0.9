@@ -100,6 +100,13 @@ def _collect_sha256(value: Any) -> set[str]:
     return output
 
 
+def _is_raw_human_evidence(row: dict[str, Any]) -> bool:
+    """metadata evidence tier가 합성물이 아닌 원시 인간 관측인지 판정한다."""
+
+    tier = str(row.get("evidence_tier", row.get("record_kind", ""))).lower()
+    return "raw_observed" in tier or tier == "human_observed"
+
+
 def _load_checkpoint_report(path: Path) -> dict[str, Any]:
     """체크포인트에서 학습 계보 보고서만 CPU로 안전하게 읽는다."""
 
@@ -129,11 +136,7 @@ def _source_audit(path: Path, expected_sha256: str | None) -> tuple[dict[str, An
         raise ValueError(f"tensor or metadata coverage mismatch: {path}")
 
     synthetic = [bool(row.get("synthetic_id") or row.get("parents")) for row in metadata]
-    raw_observed = [
-        str(row.get("evidence_tier", row.get("record_kind", ""))).lower()
-        in {"raw_observed", "human_observed"}
-        for row in metadata
-    ]
+    raw_observed = [_is_raw_human_evidence(row) for row in metadata]
     writer_fingerprints = {
         str(writer)
         for row in metadata
@@ -241,9 +244,8 @@ def _formula_audit(
                 provenance_failures.append(f"{formula_id}/{writer_id}/{glyph_id}: source label mismatch")
             meta = metadata[source_row]
             is_synthetic = bool(meta.get("synthetic_id") or meta.get("parents"))
-            tier = str(meta.get("evidence_tier", meta.get("record_kind", ""))).lower()
             selected_synthetic += int(is_synthetic)
-            selected_raw_observed += int(tier in {"raw_observed", "human_observed"})
+            selected_raw_observed += int(_is_raw_human_evidence(meta))
             selected_cross_writer += int(bool(meta.get("cross_writer")))
             expected_strokes += int(plan.get("stroke_count", 0))
         events = row.get("events", [])

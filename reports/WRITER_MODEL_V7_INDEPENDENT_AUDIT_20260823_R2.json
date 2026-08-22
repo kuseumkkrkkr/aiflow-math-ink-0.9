@@ -1,0 +1,115 @@
+{
+  "schema": "aiflow-hierarchical-writer-model-v7-independent-audit/v2",
+  "generated_at": "2026-08-22T13:57:11.141758+00:00",
+  "audited_run": "D:\\AIFlow-Workspace\\Projects\\Aiflow\\aiflow-math-ink-1.0\\artifacts\\hierarchical_writer_model_v7_20260823_r1",
+  "raw_catalog": {
+    "npz_path": "D:\\AIFlow-Workspace\\Projects\\Aiflow\\aiflow-math-ink-1.0\\artifacts\\hierarchical_writer_model_v7_20260823_r1\\raw_legacy_writer_catalog.npz",
+    "npz_sha256": "fc328bb7fe0542d281bb6aa192410be95a650fd333e6de2f92a0b919ab6d330f",
+    "metadata_path": "D:\\AIFlow-Workspace\\Projects\\Aiflow\\aiflow-math-ink-1.0\\artifacts\\hierarchical_writer_model_v7_20260823_r1\\raw_legacy_writer_catalog.metadata.jsonl",
+    "metadata_sha256": "4d59118db10d5c99f387fa20f18b1b267ff2b82d819ac4c59177a5079c0963fe",
+    "glyphs": 393,
+    "formulae": 96,
+    "writers": 7,
+    "classes": 28,
+    "t_evidence_rows": 1,
+    "fresh_sample_overlap": 0,
+    "source_partition": {
+      "actual_hashes": {
+        "formulas": "aaa749b96faa4be289dcc433f4debc17cdab618529ef8443800599b9c980a401",
+        "ownership": "b7c21e4798ba60ef5d8c985a54fb68a363165b481de56ae9b96e6d63878bf354",
+        "fresh_id_exclusion": "feff42afb42fb9a3f93ec462ca65d63ec4f01d8017b87b5d6efe191caaa9ca9c",
+        "dataset_info": "f972a199adbac5adda9f105b23f064f9e65a124b29f2f1fd8541c68e2b3c4aa2"
+      },
+      "hash_mismatch_count": 0,
+      "hash_mismatches": {},
+      "fresh_ids": 53,
+      "legacy_ownership_rows": 96,
+      "fresh_ownership_rows": 53,
+      "legacy_formulae": 96,
+      "fresh_formulae": 53,
+      "unowned_legacy_formulae": 10
+    },
+    "tensor_rebuild_exact_match": true,
+    "tensor_rebuild_max_abs_error": 0.0,
+    "token_rebuild_exact_match": true,
+    "finite": true,
+    "failure_count": 0,
+    "failures": []
+  },
+  "external_fallback": {
+    "path": "D:\\AIFlow-Workspace\\Projects\\Aiflow\\aiflow-math-ink-1.0\\artifacts\\commercial_hwr_cleanroom_dataset_v3_20260823_r1\\external_profiled_augmented.npz",
+    "sha256": "31eb534d125f38cfbe5aa33d38545489d71737461f9f605da5304ebab8d3d577",
+    "records": 4096,
+    "classes": 371,
+    "synthetic_rows": 4096,
+    "finite": true
+  },
+  "formula_generation": {
+    "formula_writer_rows": 12,
+    "formula_templates": 3,
+    "writers": 4,
+    "selected_glyphs": 72,
+    "selected_strokes": 102,
+    "selected_synthetic_glyphs": 11,
+    "selected_raw_human_observed_glyphs": 61,
+    "selected_cross_writer_synthetic_glyphs": 0,
+    "provenance_failure_count": 0,
+    "provenance_failures": [],
+    "baseline_collision_candidate_count": 0,
+    "baseline_collision_candidates": [],
+    "source_domain_counts": {
+      "approved_external_cleanroom": 11,
+      "project_owned_legacy_raw_observed": 61
+    },
+    "source_domain_counts_match_report": true,
+    "raw_parent_writers": {
+      "writer_compact_upright": [
+        "writer_001"
+      ],
+      "writer_narrow_quick": [
+        "writer_004"
+      ],
+      "writer_slanted_round": [
+        "writer_002"
+      ],
+      "writer_wide_relaxed": [
+        "writer_003"
+      ]
+    },
+    "raw_parent_mismatch_count": 0,
+    "raw_parent_mismatches": {},
+    "maximum_raw_parent_writers_per_generated_writer": 1
+  },
+  "known_writer_disjoint_replay": {
+    "receipt_path": "D:\\AIFlow-Workspace\\Projects\\Aiflow\\aiflow-math-ink-1.0\\artifacts\\hierarchical_writer_model_v7_20260823_r1\\known_writer_disjoint_replay_diagnostic\\report.json",
+    "receipt_sha256": "e38504e5406e15c6f797acfd83650ad40b0bacefd1e39cd8fcba25ca03e6aa08",
+    "status": "known_writer_disjoint_replay_diagnostic_only",
+    "formulae": 53,
+    "writers": 2,
+    "glyphs": 186,
+    "writer_overlap_with_legacy": 0,
+    "metrics": {
+      "supported_glyphs": 186,
+      "unsupported_glyphs": 0,
+      "top1": 0.8548387096774194,
+      "top5": 0.9516129032258065,
+      "formula_top1_exact": 0.6037735849056604,
+      "formula_top5_oracle": 0.8679245283018868
+    },
+    "metric_mismatch_count": 0,
+    "metric_mismatches": {},
+    "untouched_acceptance": false,
+    "promotion_evidence": false,
+    "promotion_ready": false
+  },
+  "gates": {
+    "structural_and_provenance_pass": true,
+    "raw_human_writer_evidence_present": true,
+    "coherent_fixed_raw_parent_writer": true,
+    "known_writer_disjoint_replay_reproduced": true,
+    "untouched_acceptance_present": false,
+    "commercial_model_promotion_ready": false
+  },
+  "decision": "RAW_WRITER_SHADOW_CANDIDATE",
+  "boundary": "known replay is diagnostic only; a newly collected untouched writer/formula set is required for promotion"
+}
