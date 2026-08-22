@@ -1,0 +1,122 @@
+{
+  "schema": "aiflow-writer-adaptation-independent-audit/v8",
+  "status": "AUTO_REJECT_CONFIRMED",
+  "checks": {
+    "receipt_hashes_match": true,
+    "checkpoint_unchanged": true,
+    "legacy_split_exactly_reproduced": true,
+    "known_replay_split_exactly_reproduced": true,
+    "legacy_prototype_200_reproduced_from_tensor_and_checkpoint": true,
+    "known_replay_prediction_ledger_truth_and_metrics_reproduced": true,
+    "candidate_top5_sets_preserved": true,
+    "future_grid_contains_identity": true,
+    "future_no_safe_positive_candidate": true,
+    "future_known_replay_opened": false,
+    "future_post_replay_outputs_absent": true,
+    "source_failclosed_gate_precedes_replay_open": true,
+    "promotion_ready": false
+  },
+  "hashes": {
+    "base_report": "59a49af476b43085b2d7ec060165e35b8b7d0064478eccae52f2d406469fbc47",
+    "split_manifest": "be5ff4a01bd06e2284a978126118dbb3532c1aba52bbf42978d70bce91063f1b",
+    "implementation": "d19e4d04c6f7692c195ee2195994a717d878d872e1b631ca6e0cfc0071320259",
+    "checkpoint": "c9ebd51e5ba72f1a1e8e2938343823808f7c0ab1bc7143e93332ef8b58143521",
+    "v7_report": "b5f70ee43934f42148229886402db253340cb3359637c900503294249916668d",
+    "independent_failclosed_receipt": "feaf8b36c80ff9eef4d7ff137b69facbf1ad75fba2a21ccfb808b732920f7cd4"
+  },
+  "legacy": {
+    "selected_config": {
+      "name": "prototype_200",
+      "kind": "prototype",
+      "prototype_weight": 2.0,
+      "prior_weight": 0.0,
+      "neural_rank": 0,
+      "neural_scale": 0.0,
+      "neural_epochs": 0,
+      "neural_lr": 0.0,
+      "neural_weight_decay": 0.0
+    },
+    "aggregate": {
+      "writers": 7,
+      "glyphs": 300,
+      "formulae": 73,
+      "candidate_violations": 0,
+      "baseline": {
+        "top1": 0.9033333333333333,
+        "top5": 0.9833333333333333,
+        "formula_exact": 0.6575342465753424,
+        "formula_top5_oracle": 0.958904109589041
+      },
+      "adapted": {
+        "top1": 0.9266666666666666,
+        "top5": 0.9833333333333333,
+        "formula_exact": 0.726027397260274,
+        "formula_top5_oracle": 0.958904109589041
+      }
+    },
+    "writer_regressions": [
+      {
+        "writer_id": "writer_004",
+        "top1_delta": -0.032258064516129004,
+        "formula_exact_delta": -0.125
+      }
+    ],
+    "paired_glyphs": {
+      "changed_top1": 9,
+      "improved": 8,
+      "regressed": 1,
+      "mcnemar_exact_two_sided_p": 0.0390625
+    }
+  },
+  "known_replay": {
+    "role": "diagnostic_not_promotion",
+    "aggregate": {
+      "writers": 2,
+      "glyphs": 163,
+      "formulae": 45,
+      "candidate_violations": 0,
+      "baseline": {
+        "top1": 0.8466257668711656,
+        "top5": 0.9447852760736196,
+        "formula_exact": 0.5777777777777777,
+        "formula_top5_oracle": 0.8444444444444444
+      },
+      "adapted": {
+        "top1": 0.8650306748466258,
+        "top5": 0.9447852760736196,
+        "formula_exact": 0.6,
+        "formula_top5_oracle": 0.8444444444444444
+      }
+    },
+    "writer_regressions": [],
+    "paired_glyphs": {
+      "changed_top1": 7,
+      "improved": 5,
+      "regressed": 2,
+      "mcnemar_exact_two_sided_p": 0.453125
+    },
+    "paired_formulae": {
+      "changed_top1": 5,
+      "improved": 3,
+      "regressed": 2,
+      "mcnemar_exact_two_sided_p": 1.0
+    }
+  },
+  "future_failclosed": {
+    "receipt": "D:\\AIFlow-Workspace\\Projects\\Aiflow\\aiflow-math-ink-1.0\\artifacts\\writer_adaptation_v8_20260823_independent_failclosed_r1\\pre_replay_rejection.json",
+    "eligible_non_identity_candidates": [],
+    "gate_line": 300,
+    "known_replay_open_line": 319
+  },
+  "decision": {
+    "base_report_status": "WRITER_ADAPTATION_SHADOW_DIAGNOSTIC_PASS",
+    "authoritative_final_status": "AUTO_REJECTED",
+    "reason": "aggregate gains do not satisfy the per-writer non-regression gate; known replay evidence is already known and statistically weak",
+    "product_promotion": false
+  },
+  "limitations": [
+    "The base report is retained as an immutable execution receipt; adoption_decision.json supersedes its historical PASS label.",
+    "Known replay was already known and is diagnostic only, not untouched acceptance evidence.",
+    "The legacy p-value follows a development-grid-selected configuration and is not confirmatory evidence."
+  ]
+}
